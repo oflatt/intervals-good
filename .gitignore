@@ -1,0 +1,9 @@
+target
+**/*.rs.bk
+Cargo.lock
+
+# nix stuff
+.envrc
+default.nix
+
+.vscode/settings.json
