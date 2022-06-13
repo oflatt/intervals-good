@@ -1,9 +1,10 @@
-use rug::{Float, float::Special, float::Constant, float::Round};
+use core::cmp::Ordering;
+use rug::{float::Constant, float::Round, float::Special, ops::DivAssignRound, Float};
 
 enum IntervalClassification {
     StrictlyPos,
     StrictlyNeg,
-    Mixed
+    Mixed,
 }
 
 #[derive(Debug, Clone)]
@@ -50,7 +51,6 @@ pub(crate) fn is_odd(val: Float) -> bool {
         false
     }
 }
-
 
 fn classify_interval(interval: &Interval) -> IntervalClassification {
     if interval.lo > 0 {
@@ -127,43 +127,70 @@ impl Interval {
             }
         };
 
+        use IntervalClassification::*;
         match (classify_interval(&self), classify_interval(&other)) {
-            (IntervalClassification::StrictlyPos, IntervalClassification::StrictlyPos) => {
-                perform_mult(&self.lo, &other.lo, &self.hi, &other.hi)
-            }
+            (StrictlyPos, StrictlyPos) => perform_mult(&self.lo, &other.lo, &self.hi, &other.hi),
 
-            (IntervalClassification::StrictlyPos, IntervalClassification::StrictlyNeg) => {
-                perform_mult(&self.hi, &other.lo, &self.lo, &other.hi)
-            }
+            (StrictlyPos, StrictlyNeg) => perform_mult(&self.hi, &other.lo, &self.lo, &other.hi),
 
-            (IntervalClassification::StrictlyPos, IntervalClassification::Mixed) => {
-                perform_mult(&self.hi, &other.lo, &self.hi, &other.hi)
-            }
+            (StrictlyPos, Mixed) => perform_mult(&self.hi, &other.lo, &self.hi, &other.hi),
 
-            (IntervalClassification::StrictlyNeg, IntervalClassification::Mixed) => {
-                perform_mult(&self.lo, &other.hi, &self.lo, &other.lo)
-            }
+            (StrictlyNeg, Mixed) => perform_mult(&self.lo, &other.hi, &self.lo, &other.lo),
 
-            (IntervalClassification::StrictlyNeg, IntervalClassification::StrictlyPos) => {
-                perform_mult(&self.lo, &other.hi, &self.hi, &other.lo)
-            }
+            (StrictlyNeg, StrictlyPos) => perform_mult(&self.lo, &other.hi, &self.hi, &other.lo),
 
-            (IntervalClassification::StrictlyNeg, IntervalClassification::StrictlyNeg) => {
-                perform_mult(&self.hi, &other.hi, &self.lo, &other.lo)
-            }
+            (StrictlyNeg, StrictlyNeg) => perform_mult(&self.hi, &other.hi, &self.lo, &other.lo),
 
-            (IntervalClassification::Mixed, IntervalClassification::StrictlyPos) => {
-                perform_mult(&self.lo, &other.hi, &self.hi, &other.hi)
-            }
+            (Mixed, StrictlyPos) => perform_mult(&self.lo, &other.hi, &self.hi, &other.hi),
 
-            (IntervalClassification::Mixed, IntervalClassification::StrictlyNeg) => {
-                perform_mult(&self.hi, &other.lo, &self.lo, &other.lo)
-            }
+            (Mixed, StrictlyNeg) => perform_mult(&self.hi, &other.lo, &self.lo, &other.lo),
 
-            (IntervalClassification::Mixed, IntervalClassification::Mixed) => {
-                perform_mult(&self.hi, &other.lo, &self.lo, &other.lo).union(
-                    &perform_mult(&self.lo, &other.hi, &self.hi, &other.hi))
+            (Mixed, Mixed) => perform_mult(&self.hi, &other.lo, &self.lo, &other.lo)
+                .union(&perform_mult(&self.lo, &other.hi, &self.hi, &other.hi)),
+        }
+    }
+
+    pub fn get_const(&self) -> Option<Float> {
+        if self.lo == self.hi {
+            Some(self.lo.clone())
+        } else {
+            None
+        }
+    }
+
+    pub fn div(&self, other: &Interval) -> Interval {
+        let zero = Float::with_val(other.lo.prec(), 0);
+        let error = ErrorInterval {
+            lo: self.err.lo || other.err.lo || (other.lo <= zero && other.hi >= zero),
+            hi: self.err.hi || other.err.hi || other.get_const() == Some(zero),
+        };
+
+        let perform_div = |lo1: &Float, lo2: &Float, hi1: &Float, hi2: &Float| {
+            let mut lo = lo1.clone();
+            lo.div_assign_round(lo2, Round::Down);
+            let mut hi = hi1.clone();
+            hi.div_assign_round(hi2, Round::Up);
+
+            Interval {
+                lo,
+                hi,
+                err: self.err.union(&other.err),
             }
+        };
+
+        use IntervalClassification::*;
+        match (classify_interval(&self), classify_interval(&other)) {
+            (_any, Mixed) => Interval {
+                lo: Float::with_val(self.lo.prec(), std::f64::NEG_INFINITY),
+                hi: Float::with_val(self.lo.prec(), std::f64::INFINITY),
+                err: error,
+            },
+            (StrictlyPos, StrictlyPos) => perform_div(&self.lo, &other.hi, &self.hi, &other.lo),
+            (StrictlyPos, StrictlyNeg) => perform_div(&self.hi, &other.hi, &self.lo, &other.lo),
+            (StrictlyNeg, StrictlyPos) => perform_div(&self.lo, &other.lo, &self.hi, &other.hi),
+            (StrictlyNeg, StrictlyNeg) => perform_div(&self.hi, &other.lo, &self.lo, &other.hi),
+            (Mixed, StrictlyPos) => perform_div(&self.lo, &other.lo, &self.hi, &other.lo),
+            (Mixed, StrictlyNeg) => perform_div(&self.hi, &other.hi, &self.lo, &other.hi),
         }
     }
 }
@@ -171,19 +198,23 @@ impl Interval {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rug::Float;
-    use std::ops::Add;
     use rand;
     use rand::Rng;
+    use std::ops::Add;
 
     #[test]
     fn smaller_intervals_refine() {
-        let interval_functions = vec![
-            (Interval::add, Add::add),
+        type Operator = fn(&Interval, &Interval) -> Interval;
+        type FOperator = fn(f64, f64) -> f64;
+        let interval_functions: Vec<(Operator, FOperator)> = vec![
+            (Interval::add, std::ops::Add::add),
+            (Interval::sub, std::ops::Sub::sub),
+            (Interval::mul, std::ops::Mul::mul),
+            (Interval::div, std::ops::Div::div),
         ];
         let mut rng = rand::thread_rng();
 
-        for i in 0..10000 {
+        for _i in 0..10000 {
             for (ifun, realfun) in &interval_functions {
                 let lo1 = rng.gen_range(-40.0..40.0);
                 let lo2 = rng.gen_range(lo1..40.0);
@@ -197,10 +228,14 @@ mod tests {
                 let finalival = ifun(&ival1, &ival2);
                 let finalreal = realfun(realval1, realval2);
 
-                assert!(finalreal <= finalival.hi.clone(), "{} <= {}", finalreal, finalival.hi);
+                assert!(
+                    finalreal <= finalival.hi.clone(),
+                    "{} <= {}",
+                    finalreal,
+                    finalival.hi
+                );
                 assert!(finalreal >= finalival.lo.clone());
             }
-
         }
     }
 }
