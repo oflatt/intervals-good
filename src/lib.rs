@@ -1,5 +1,5 @@
 use core::cmp::Ordering;
-use rug::{float::Constant, float::Round, float::Special, ops::DivAssignRound, Float};
+use rug::{float::Constant, ops::PowAssignRound, float::Round, float::Special, ops::DivAssignRound, Float};
 use egg::Symbol;
 
 enum IntervalClassification {
@@ -18,7 +18,7 @@ impl ErrorInterval {
     pub fn union(&self, other: &ErrorInterval) -> ErrorInterval {
         ErrorInterval {
             lo: self.lo || other.lo,
-            hi: self.hi || other.hi,
+            hi: self.hi && other.hi,
         }
     }
 }
@@ -53,16 +53,7 @@ pub(crate) fn is_odd(val: Float) -> bool {
     }
 }
 
-fn classify_interval(interval: &Interval) -> IntervalClassification {
-    if interval.lo > 0 {
-        IntervalClassification::StrictlyPos
-    } else if interval.hi < 0 {
-        IntervalClassification::StrictlyNeg
-    } else {
-        IntervalClassification::Mixed
-    }
-}
-
+    
 impl Interval {
     pub fn new(prec: u32, lo: f64, hi: f64) -> Interval {
         Interval {
@@ -73,6 +64,20 @@ impl Interval {
                 hi: false,
             },
         }
+    }
+
+    fn classify_with(&self, val: &Float) -> IntervalClassification {
+        if &self.lo > val {
+            IntervalClassification::StrictlyPos
+        } else if &self.hi < val {
+            IntervalClassification::StrictlyNeg
+        } else {
+            IntervalClassification::Mixed
+        }
+    }
+
+    fn classify(&self) -> IntervalClassification {
+        self.classify_with(&Float::with_val(53, 0))
     }
 
     pub fn union(&self, other: &Interval) -> Interval {
@@ -129,7 +134,7 @@ impl Interval {
         };
 
         use IntervalClassification::*;
-        match (classify_interval(&self), classify_interval(&other)) {
+        match (self.classify(), other.classify()) {
             (StrictlyPos, StrictlyPos) => perform_mult(&self.lo, &other.lo, &self.hi, &other.hi),
 
             (StrictlyPos, StrictlyNeg) => perform_mult(&self.hi, &other.lo, &self.lo, &other.hi),
@@ -180,7 +185,7 @@ impl Interval {
         };
 
         use IntervalClassification::*;
-        match (classify_interval(&self), classify_interval(&other)) {
+        match (self.classify(), other.classify()) {
             (_any, Mixed) => Interval {
                 lo: Float::with_val(self.lo.prec(), std::f64::NEG_INFINITY),
                 hi: Float::with_val(self.lo.prec(), std::f64::INFINITY),
@@ -323,7 +328,131 @@ impl Interval {
             hi: tmp_hi,
             err: self.err.union(&other.err),
         }
+    }
 
+    // assumes self is positive or zero
+    fn pow_pos(&self, other: &Interval) -> Interval {
+        let perform_pow = |lo1: &Float, lo2: &Float, hi1: &Float, hi2: &Float| {
+            let mut tmp_lo = lo1.clone();
+            tmp_lo.pow_assign_round(lo2, Round::Down);
+            let mut tmp_hi = hi1.clone();
+            tmp_hi.pow_assign_round(hi2, Round::Up);
+            Interval {
+                lo: tmp_lo,
+                hi: tmp_hi,
+                err: self.err.union(&other.err),
+            }
+        };
+
+        // copied from mult (just replaced name with perform_pow)
+        use IntervalClassification::*;
+        match (self.classify_with(&Float::with_val(other.lo.prec(), 1 as u64)), other.classify()) {
+            (StrictlyPos, StrictlyPos) => perform_pow(&self.lo, &other.lo, &self.hi, &other.hi),
+
+            (StrictlyPos, StrictlyNeg) => perform_pow(&self.hi, &other.lo, &self.lo, &other.hi),
+
+            (StrictlyPos, Mixed) => perform_pow(&self.hi, &other.lo, &self.hi, &other.hi),
+
+            (StrictlyNeg, Mixed) => perform_pow(&self.lo, &other.hi, &self.lo, &other.lo),
+
+            (StrictlyNeg, StrictlyPos) => perform_pow(&self.lo, &other.hi, &self.hi, &other.lo),
+
+            (StrictlyNeg, StrictlyNeg) => perform_pow(&self.hi, &other.hi, &self.lo, &other.lo),
+
+            (Mixed, StrictlyPos) => perform_pow(&self.lo, &other.hi, &self.hi, &other.hi),
+
+            (Mixed, StrictlyNeg) => perform_pow(&self.hi, &other.lo, &self.lo, &other.lo),
+
+            (Mixed, Mixed) => perform_pow(&self.hi, &other.lo, &self.lo, &other.lo)
+                .union(&perform_pow(&self.lo, &other.hi, &self.hi, &other.hi)),
+        }
+    }
+
+    // assumes x negative
+    fn pow_neg(&self, other: &Interval) -> Interval {
+        let pow_ceil = other.lo.clone().ceil();
+        let pow_floor = other.hi.clone().floor();
+        let zero: Float = Float::with_val(self.lo.prec(), 0 as u64);
+
+        let error = ErrorInterval {
+            lo: self.err.lo || other.err.lo || other.lo < other.hi,
+            hi: self.err.hi || other.err.hi,
+        };
+        if pow_floor < pow_ceil {
+            if self.hi == zero {
+                Interval {
+                    lo: zero.clone(),
+                    hi: zero,
+                    err: ErrorInterval {
+                        lo: true,
+                        hi: self.err.hi.clone(),
+                    },
+                }
+            } else  {
+                Interval {
+                    lo: Float::with_val(self.lo.prec(), f64::NAN),
+                    hi: Float::with_val(self.lo.prec(), f64::NAN),
+                    err: ErrorInterval {
+                        lo: true,
+                        hi: true,
+                    },
+                }
+            }
+        } else if pow_ceil == pow_floor {
+            let pos = self.fabs().pow_pos(&Interval {
+                lo: pow_ceil.clone(),
+                hi: pow_ceil.clone(),
+                err: error,
+            });
+            if pow_ceil.to_integer().unwrap().is_odd() {
+                pos.neg()
+            } else {
+                pos
+            }
+        } else {
+            let odds = Interval {
+                lo: if pow_ceil.clone().to_integer().unwrap().is_odd() { pow_ceil.clone() } else { pow_ceil.clone() + (1 as u64) },
+                hi: if pow_floor.to_integer().unwrap().is_odd() { pow_floor.clone() } else { pow_floor.clone() - (1 as u64) },
+                err: error.clone(),
+            };
+            let evens = Interval {
+                lo: if pow_ceil.clone().to_integer().unwrap().is_odd() { pow_ceil + (1 as u64) } else { pow_ceil },
+                hi: if pow_floor.to_integer().unwrap().is_odd() { pow_floor - (1 as u64) } else { pow_floor },
+                err: error,
+            };
+            self.fabs().pow_pos(&evens).union(&self.fabs().pow_pos(&odds).neg())
+        }
+    }
+
+    pub fn contains(&self, value: &Float) -> bool {
+        &self.lo <= value && value <= &self.hi
+    }
+
+    pub fn split(&self, along: &Float) -> Option<(Interval, Interval)> {
+        if self.contains(along) {
+            Some((Interval {
+                lo: self.lo.clone(),
+                hi: along.clone(),
+                err: self.err.clone(),
+            }, Interval {
+                lo: along.clone(),
+                hi: self.hi.clone(),
+                err: self.err.clone(),
+            }))
+        } else {
+            None
+        }
+    }
+
+    pub fn pow(&self, other: &Interval) -> Interval {
+        if self.hi < Float::with_val(self.lo.prec(), 0 as u64) {
+            self.pow_neg(&other)
+        } else if self.lo >= Float::with_val(self.lo.prec(), 0 as u64) {
+            self.pow_pos(&other)
+        } else {
+            let (neg, pos) = self.split(&Float::with_val(self.lo.prec(), 0 as u64)).unwrap();
+            neg.pow_neg(other).union(&pos.pow_pos(&other))
+        }
     }
 }
 
@@ -346,6 +475,7 @@ mod tests {
             ("mul".into(), Interval::mul, std::ops::Mul::mul),
             ("div".into(), Interval::div, std::ops::Div::div),
             ("hypot".into(), Interval::hypot, |x, y| x.hypot(y)),
+            ("pow".into(), Interval::pow, |x, y| x.powf(y)),
         ];
         let single_operand_functions: Vec<(Symbol, SingleOperator, SingleFOperator)> = vec![
             ("round_nearest_int".into(), Interval::round_nearest_int, |x| x.round()),
@@ -365,7 +495,7 @@ mod tests {
         ];
         let mut rng = rand::thread_rng();
 
-        for _i in 0..10000 {
+        for _i in 0..50000 {
             for (name, ifun, realfun) in &interval_functions {
                 let lo1 = rng.gen_range(-40.0..40.0);
                 let lo2 = rng.gen_range(lo1..41.0);
@@ -382,12 +512,19 @@ mod tests {
                 if finalreal.is_nan() {
                     assert!(finalival.err.lo);
                 } else {
+                    assert!(!finalival.err.hi,
+                            "{} and {} gave us a guaranteed error for {}. Got: {}", realval1, realval2, name, finalreal);
                     assert!(
                         finalreal <= finalival.hi.clone(),
-                        "{}: {} <= {}",
+                        "{}({} {}): {} <= {} \n Intervals: {:?} and {:?} to {:?}",
                         name,
+                        realval1,
+                        realval2,
                         finalreal,
-                        finalival.hi
+                        finalival.hi,
+                        ival1,
+                        ival2,
+                        finalival
                     );
                     assert!(finalreal >= finalival.lo.clone(),
                             "{} >= {}",
@@ -405,10 +542,9 @@ mod tests {
                 let finalreal = realfun(realval1);
 
                 if finalreal.is_nan() {
-                    println!("fun: {}", name);
-                    println!("lo1: {} hi1: {} realval1: {}", lo1, hi1, realval1);
                     assert!(finalival.err.lo);
                 } else {
+                    assert!(!finalival.err.hi);
                     assert!(
                         finalreal <= finalival.hi.clone(),
                         "{}: {} <= {}",
