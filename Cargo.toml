@@ -8,3 +8,4 @@ edition = "2021"
 [dependencies]
 rug = "1.16.0"
 rand = "0.8.5"
+egg = "0.9.0"

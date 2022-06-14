@@ -1,5 +1,6 @@
 use core::cmp::Ordering;
 use rug::{float::Constant, float::Round, float::Special, ops::DivAssignRound, Float};
+use egg::Symbol;
 
 enum IntervalClassification {
     StrictlyPos,
@@ -195,10 +196,47 @@ impl Interval {
     }
 
     fn monotonic(&self, fun: fn(&Float, Round) -> Float) -> Interval {
+        let tmplo = fun(&self.lo, Round::Down);
+        let tmphi = fun(&self.hi, Round::Up);
+        if tmplo.is_nan() {
+            panic!("monotonic: lo is NaN");
+        }
+        if tmphi.is_nan() {
+            panic!("monotonic: hi is NaN");
+        }
         Interval {
-            lo: fun(&self.lo, Round::Down),
-            hi: fun(&self.hi, Round::Up),
+            lo: tmplo,
+            hi: tmphi,
             err: self.err.clone(),
+        }
+    }
+
+    fn monotonic_mut(&self, fun: fn(&mut Float, Round) -> std::cmp::Ordering) -> Interval {
+        let mut tmplo = self.lo.clone();
+        let mut tmphi = self.hi.clone();
+        fun(&mut tmplo, Round::Down);
+        fun(&mut tmphi, Round::Up);
+        if tmplo.is_nan() {
+            panic!("monotonic_mut: lo is NaN");
+        }
+        if tmphi.is_nan() {
+            panic!("monotonic_mut: hi is NaN");
+        }
+        Interval {
+            lo: tmplo,
+            hi: tmphi,
+            err: self.err.clone(),
+        }
+    }
+
+    fn clamp(&self, lo: &Float, hi: &Float) -> Interval {
+        Interval {
+            lo: self.lo.clone().max(lo).min(hi),
+            hi: self.hi.clone().min(hi).max(lo),
+            err: ErrorInterval {
+                lo: self.err.lo || &self.lo < lo || &self.hi > hi,
+                hi: self.err.hi || &self.hi < lo || &self.lo > hi,
+            },   
         }
     }
 
@@ -236,6 +274,57 @@ impl Interval {
             }
         }
     }
+
+    pub fn exp(&self) -> Interval {
+        self.monotonic_mut(Float::exp_round)
+    }
+
+    pub fn exp_m1(&self) -> Interval {
+        self.monotonic_mut(Float::exp_m1_round)
+    }
+
+    pub fn exp2(&self) -> Interval {
+        self.monotonic_mut(Float::exp2_round)
+    }
+
+    pub fn ln(&self) -> Interval {
+        self.clamp(&Float::with_val(self.lo.prec(), 0), &Float::with_val(self.lo.prec(), f64::INFINITY)).monotonic_mut(Float::ln_round)
+    }
+
+    pub fn log10(&self) -> Interval {
+        self.clamp(&Float::with_val(self.lo.prec(), 0), &Float::with_val(self.lo.prec(), f64::INFINITY)).monotonic_mut(Float::log10_round)
+    }
+
+    pub fn log2(&self) -> Interval {
+        self.clamp(&Float::with_val(self.lo.prec(), 0), &Float::with_val(self.lo.prec(), f64::INFINITY)).monotonic_mut(Float::log2_round)
+    }
+
+    pub fn ln_1p(&self) -> Interval {
+        self.clamp(&Float::with_val(self.lo.prec(), -1), &Float::with_val(self.lo.prec(), f64::INFINITY)).monotonic_mut(Float::ln_1p_round)
+    }
+
+    pub fn sqrt(&self) -> Interval {
+        self.clamp(&Float::with_val(self.lo.prec(), 0), &Float::with_val(self.lo.prec(), f64::INFINITY)).monotonic_mut(Float::sqrt_round)
+    }
+
+    pub fn cbrt(&self) -> Interval {
+        self.monotonic_mut(Float::cbrt_round)
+    }
+
+    pub fn hypot(&self, other: &Interval) -> Interval {
+        let self_pos = self.fabs();
+        let other_pos = other.fabs();
+        let mut tmp_lo = self_pos.lo.clone();
+        tmp_lo.hypot_round(&other_pos.lo, Round::Down);
+        let mut tmp_hi = self_pos.hi.clone();
+        tmp_hi.hypot_round(&other_pos.hi, Round::Up);
+        Interval {
+            lo: tmp_lo,
+            hi: tmp_hi,
+            err: self.err.union(&other.err),
+        }
+
+    }
 }
 
 #[cfg(test)]
@@ -251,23 +340,33 @@ mod tests {
         type SingleOperator = fn(&Interval) -> Interval;
         type FOperator = fn(f64, f64) -> f64;
         type SingleFOperator = fn(f64) -> f64;
-        let interval_functions: Vec<(Operator, FOperator)> = vec![
-            (Interval::add, std::ops::Add::add),
-            (Interval::sub, std::ops::Sub::sub),
-            (Interval::mul, std::ops::Mul::mul),
-            (Interval::div, std::ops::Div::div),
+        let interval_functions: Vec<(Symbol, Operator, FOperator)> = vec![
+            ("add".into(), Interval::add, std::ops::Add::add),
+            ("sub".into(), Interval::sub, std::ops::Sub::sub),
+            ("mul".into(), Interval::mul, std::ops::Mul::mul),
+            ("div".into(), Interval::div, std::ops::Div::div),
+            ("hypot".into(), Interval::hypot, |x, y| x.hypot(y)),
         ];
-        let single_operand_functions: Vec<(SingleOperator, SingleFOperator)> = vec![
-            (Interval::round_nearest_int, |x| x.round()),
-            (Interval::ceil, |x| x.ceil()),
-            (Interval::floor, |x| x.floor()),
-            (Interval::trunc, |x| x.trunc()),
-            (Interval::fabs, |x| x.abs()),
+        let single_operand_functions: Vec<(Symbol, SingleOperator, SingleFOperator)> = vec![
+            ("round_nearest_int".into(), Interval::round_nearest_int, |x| x.round()),
+            ("ceil".into(), Interval::ceil, |x| x.ceil()),
+            ("floor".into(), Interval::floor, |x| x.floor()),
+            ("trunc".into(), Interval::trunc, |x| x.trunc()),
+            ("fabs".into(), Interval::fabs, |x| x.abs()),
+            ("exp".into(), Interval::exp, |x| x.exp()),
+            ("exp_m1".into(), Interval::exp_m1, |x| x.exp_m1()),
+            ("exp2".into(), Interval::exp2, |x| x.exp2()),
+            ("ln".into(), Interval::ln, |x| x.ln()),
+            ("log10".into(), Interval::log10, |x| x.log10()),
+            ("log2".into(), Interval::log2, |x| x.log2()),
+            ("ln_1p".into(), Interval::ln_1p, |x| x.ln_1p()),
+            ("sqrt".into(), Interval::sqrt, |x| x.sqrt()),
+            ("cbrt".into(), Interval::cbrt, |x| x.cbrt()),
         ];
         let mut rng = rand::thread_rng();
 
         for _i in 0..10000 {
-            for (ifun, realfun) in &interval_functions {
+            for (name, ifun, realfun) in &interval_functions {
                 let lo1 = rng.gen_range(-40.0..40.0);
                 let lo2 = rng.gen_range(lo1..41.0);
                 let ival1 = Interval::new(53, lo1, lo2);
@@ -280,16 +379,24 @@ mod tests {
                 let finalival = ifun(&ival1, &ival2);
                 let finalreal = realfun(realval1, realval2);
 
-                assert!(
-                    finalreal <= finalival.hi.clone(),
-                    "{} <= {}",
-                    finalreal,
-                    finalival.hi
-                );
-                assert!(finalreal >= finalival.lo.clone());
+                if finalreal.is_nan() {
+                    assert!(finalival.err.lo);
+                } else {
+                    assert!(
+                        finalreal <= finalival.hi.clone(),
+                        "{}: {} <= {}",
+                        name,
+                        finalreal,
+                        finalival.hi
+                    );
+                    assert!(finalreal >= finalival.lo.clone(),
+                            "{} >= {}",
+                            finalreal,
+                            finalival.lo);
+                }
             }
 
-            for (ifun, realfun) in &single_operand_functions {
+            for (name, ifun, realfun) in &single_operand_functions {
                 let lo1 = rng.gen_range(-40.0..40.0);
                 let hi1 = rng.gen_range(lo1..41.0);
                 let ival1 = Interval::new(53, lo1, hi1);
@@ -297,13 +404,24 @@ mod tests {
                 let finalival = ifun(&ival1);
                 let finalreal = realfun(realval1);
 
-                assert!(
-                    finalreal <= finalival.hi.clone(),
-                    "{} <= {}",
-                    finalreal,
-                    finalival.hi
-                );
-                assert!(finalreal >= finalival.lo.clone());
+                if finalreal.is_nan() {
+                    println!("fun: {}", name);
+                    println!("lo1: {} hi1: {} realval1: {}", lo1, hi1, realval1);
+                    assert!(finalival.err.lo);
+                } else {
+                    assert!(
+                        finalreal <= finalival.hi.clone(),
+                        "{}: {} <= {}",
+                        name,
+                        finalreal,
+                        finalival.hi
+                    );
+                    assert!(finalreal >= finalival.lo.clone(),
+                            "{}: {} >= {}",
+                            name,
+                            finalreal,
+                            finalival.lo);
+                }
             }
         }
     }
