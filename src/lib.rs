@@ -193,6 +193,49 @@ impl Interval {
             (Mixed, StrictlyNeg) => perform_div(&self.hi, &other.hi, &self.lo, &other.hi),
         }
     }
+
+    fn monotonic(&self, fun: fn(&Float, Round) -> Float) -> Interval {
+        Interval {
+            lo: fun(&self.lo, Round::Down),
+            hi: fun(&self.hi, Round::Up),
+            err: self.err.clone(),
+        }
+    }
+
+    pub fn round_nearest_int(&self) -> Interval {
+        Interval {
+            lo: self.lo.clone().round(),
+            hi: self.hi.clone().round(),
+            err: self.err.clone(),
+        }
+    }
+
+    pub fn ceil(&self) -> Interval {
+        self.monotonic(|x, _| x.clone().ceil())
+    }
+
+    pub fn floor(&self) -> Interval {
+        self.monotonic(|x, _| x.clone().floor())
+    }
+
+    pub fn trunc(&self) -> Interval {
+        self.monotonic(|x, _| x.clone().trunc())
+    }
+
+    pub fn fabs(&self) -> Interval {
+        let zero = Float::with_val(self.lo.prec(), 0);
+        if self.lo >= zero {
+            self.clone()
+        } else if self.hi <= zero {
+            self.neg()
+        } else {
+            Interval {
+                lo: zero,
+                hi: self.hi.clone().max(&-self.lo.clone()),
+                err: self.err.clone(),
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -205,28 +248,54 @@ mod tests {
     #[test]
     fn smaller_intervals_refine() {
         type Operator = fn(&Interval, &Interval) -> Interval;
+        type SingleOperator = fn(&Interval) -> Interval;
         type FOperator = fn(f64, f64) -> f64;
+        type SingleFOperator = fn(f64) -> f64;
         let interval_functions: Vec<(Operator, FOperator)> = vec![
             (Interval::add, std::ops::Add::add),
             (Interval::sub, std::ops::Sub::sub),
             (Interval::mul, std::ops::Mul::mul),
             (Interval::div, std::ops::Div::div),
         ];
+        let single_operand_functions: Vec<(SingleOperator, SingleFOperator)> = vec![
+            (Interval::round_nearest_int, |x| x.round()),
+            (Interval::ceil, |x| x.ceil()),
+            (Interval::floor, |x| x.floor()),
+            (Interval::trunc, |x| x.trunc()),
+            (Interval::fabs, |x| x.abs()),
+        ];
         let mut rng = rand::thread_rng();
 
         for _i in 0..10000 {
             for (ifun, realfun) in &interval_functions {
                 let lo1 = rng.gen_range(-40.0..40.0);
-                let lo2 = rng.gen_range(lo1..40.0);
+                let lo2 = rng.gen_range(lo1..41.0);
                 let ival1 = Interval::new(53, lo1, lo2);
                 let hi1 = rng.gen_range(-40.0..40.0);
-                let hi2 = rng.gen_range(hi1..40.0);
+                let hi2 = rng.gen_range(hi1..41.0);
                 let ival2 = Interval::new(53, hi1, hi2);
 
                 let realval1 = rng.gen_range(lo1..lo2);
                 let realval2 = rng.gen_range(hi1..hi2);
                 let finalival = ifun(&ival1, &ival2);
                 let finalreal = realfun(realval1, realval2);
+
+                assert!(
+                    finalreal <= finalival.hi.clone(),
+                    "{} <= {}",
+                    finalreal,
+                    finalival.hi
+                );
+                assert!(finalreal >= finalival.lo.clone());
+            }
+
+            for (ifun, realfun) in &single_operand_functions {
+                let lo1 = rng.gen_range(-40.0..40.0);
+                let hi1 = rng.gen_range(lo1..41.0);
+                let ival1 = Interval::new(53, lo1, hi1);
+                let realval1 = rng.gen_range(lo1..hi1);
+                let finalival = ifun(&ival1);
+                let finalreal = realfun(realval1);
 
                 assert!(
                     finalreal <= finalival.hi.clone(),
