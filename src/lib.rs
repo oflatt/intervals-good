@@ -676,6 +676,80 @@ impl Interval {
             }
         }
     }
+
+    pub fn atan2(&self, other: &Interval) -> Interval {
+        let mkatan = |lo1: &Float, lo2: &Float, hi1: &Float, hi2: &Float| {
+            let mut lotmp = lo1.clone();
+            let mut hitmp = hi1.clone();
+            lotmp.atan2_round(lo2, Round::Down);
+            hitmp.atan2_round(hi2, Round::Up);
+            Interval {
+                lo: lotmp,
+                hi: hitmp,
+                err: self.err.clone(),
+            }
+        };
+        
+        use IntervalClassification::*;
+        match (other.classify(), self.classify()) {
+            (StrictlyNeg, StrictlyNeg) => mkatan(
+                &self.hi,
+                &other.lo,
+                &self.lo,
+                &other.hi,
+            ),
+            (Mixed, StrictlyNeg) => mkatan(
+                &self.hi,
+                &other.lo,
+                &self.hi,
+                &other.hi,
+            ),
+            (StrictlyPos, StrictlyNeg) => mkatan(
+                &self.lo,
+                &other.lo,
+                &self.hi,
+                &other.hi,
+            ),
+            (StrictlyPos, Mixed) => mkatan(
+                &self.lo,
+                &other.lo,
+                &self.hi,
+                &other.lo,
+            ),
+            (StrictlyPos, StrictlyPos) => mkatan(
+                &self.lo,
+                &other.hi,
+                &self.hi,
+                &other.lo,
+            ),
+            (Mixed, StrictlyPos) => mkatan(
+                &self.lo,
+                &other.hi,
+                &self.lo,
+                &other.lo,
+            ),
+            (StrictlyNeg, StrictlyPos) => mkatan(
+                &self.hi,
+                &other.hi,
+                &self.lo,
+                &other.lo,
+            ),
+            (_, Mixed) => {
+                let mut hipi = Float::new(self.lo.prec());
+                hipi.assign_round(Constant::Pi, Round::Up);
+                let zero = Float::with_val(self.lo.prec(), 0 as i64);
+
+                Interval {
+                    lo: -hipi.clone(),
+                    hi: hipi,
+                    err: ErrorInterval {
+                        lo: self.err.lo || other.err.lo || self.hi >= zero,
+                        hi: self.err.lo || other.err.lo || (self.lo == 0 && self.hi == 0 && other.lo == 0 && other.hi == 0),
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -698,6 +772,7 @@ mod tests {
             ("div".into(), Interval::div, std::ops::Div::div),
             ("hypot".into(), Interval::hypot, |x, y| x.hypot(y)),
             ("pow".into(), Interval::pow, |x, y| x.powf(y)),
+            ("atan2".into(), Interval::atan2, |x, y| x.atan2(y)),
         ];
         let single_operand_functions: Vec<(Symbol, SingleOperator, SingleFOperator)> = vec![
             ("round_nearest_int".into(), Interval::round_nearest_int, |x| x.round()),
