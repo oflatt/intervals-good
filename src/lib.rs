@@ -260,6 +260,24 @@ impl Interval {
         }
     }
 
+    fn comonotonic_mut(&self, fun: fn(&mut Float, Round) -> std::cmp::Ordering) -> Interval {
+        let mut tmplo = self.hi.clone();
+        let mut tmphi = self.lo.clone();
+        fun(&mut tmplo, Round::Down);
+        fun(&mut tmphi, Round::Up);
+        if tmplo.is_nan() {
+            panic!("comonotonic_mut: lo is NaN");
+        }
+        if tmphi.is_nan() {
+            panic!("comonotonic_mut: hi is NaN");
+        }
+        Interval {
+            lo: tmplo,
+            hi: tmphi,
+            err: self.err.clone(),
+        }
+    }
+
     fn clamp(&self, lo: &Float, hi: &Float) -> Interval {
         Interval {
             lo: self.lo.clone().max(lo).min(hi),
@@ -750,6 +768,42 @@ impl Interval {
             }
         }
     }
+
+    pub fn cosh(&self) -> Interval {
+        self.fabs().monotonic_mut(Float::cosh_round)
+    }
+
+    pub fn sinh(&self) -> Interval {
+        self.monotonic_mut(Float::sinh_round)
+    }
+
+    pub fn tanh(&self) -> Interval {
+        self.monotonic_mut(Float::tanh_round)
+    }
+
+    pub fn asinh(&self) -> Interval {
+        self.monotonic_mut(Float::asinh_round)
+    }
+
+    pub fn acosh(&self) -> Interval {
+        self.clamp(&Float::with_val(self.lo.prec(), 1 as i64), &Float::with_val(self.lo.prec(), f64::INFINITY)).monotonic_mut(Float::acosh_round)
+    }
+
+    pub fn atanh(&self) -> Interval {
+        self.clamp(&Float::with_val(self.lo.prec(), -1 as i64), &Float::with_val(self.lo.prec(), 1 as i64)).monotonic_mut(Float::atanh_round)
+    }
+
+    pub fn asin(&self) -> Interval {
+        self.clamp(&Float::with_val(self.lo.prec(), -1 as i64), &Float::with_val(self.lo.prec(), 1 as i64)).monotonic_mut(Float::asin_round)
+    }
+
+    pub fn acos(&self) -> Interval {
+        self.clamp(&Float::with_val(self.lo.prec(), -1 as i64), &Float::with_val(self.lo.prec(), 1 as i64)).comonotonic_mut(Float::acos_round)
+    }
+
+    pub fn atan(&self) -> Interval {
+        self.monotonic_mut(Float::atan_round)
+    }
 }
 
 #[cfg(test)]
@@ -792,6 +846,15 @@ mod tests {
             ("sin".into(), Interval::sin, |x| x.sin()),
             ("cos".into(), Interval::cos, |x| x.cos()),
             ("tan".into(), Interval::tan, |x| x.tan()),
+            ("asin".into(), Interval::asin, |x| x.asin()),
+            ("acos".into(), Interval::acos, |x| x.acos()),
+            ("atan".into(), Interval::atan, |x| x.atan()),
+            ("sinh".into(), Interval::sinh, |x| x.sinh()),
+            ("cosh".into(), Interval::cosh, |x| x.cosh()),
+            ("tanh".into(), Interval::tanh, |x| x.tanh()),
+            ("asinh".into(), Interval::asinh, |x| x.asinh()),
+            ("acosh".into(), Interval::acosh, |x| x.acosh()),
+            ("atanh".into(), Interval::atanh, |x| x.atanh()),
         ];
         let mut rng = rand::thread_rng();
 
