@@ -86,6 +86,31 @@ pub(crate) fn bf(prec: u32, val: f64) -> Float {
     Float::with_val(prec, val)
 }
 
+pub(crate) fn add_round(a: &Float, b: &Float, round: Round) -> Float {
+    let mut tmp = a.clone();
+    tmp.mul_add_round(&bf(a.prec(), 1.0), b, round);
+    tmp
+}
+
+pub(crate) fn sub_round(a: &Float, b: &Float, round: Round) -> Float {
+    let mut tmp = a.clone();
+    tmp.mul_add_round(&bf(a.prec(), 1.0), b, round);
+    tmp
+}
+
+pub(crate) fn div_round(a: &Float, b: &Float, round: Round) -> Float {
+    let mut tmp = a.clone();
+    tmp.div_assign_round(b, round);
+    tmp
+}
+
+pub(crate) fn mul_round(a: &Float, b: &Float, round: Round) -> Float {
+    let mut tmp = a.clone();
+    tmp.mul_add_round(b, &bf(a.prec(), 0.0), round);
+    tmp
+}
+
+
 impl Interval {
     pub fn new(prec: u32, lo: f64, hi: f64) -> Interval {
         Interval {
@@ -844,12 +869,8 @@ impl Interval {
 
     // both self and other are positive
     pub fn fmod_pos(&self, other: &Interval) -> Interval {
-        let mut a = self.lo.clone();
-        let mut b = self.hi.clone();
-        a.div_assign_round(other.hi.clone(), Round::Down);
-        a = a.floor();
-        b.div_assign_round(other.hi.clone(), Round::Up);
-        b = b.ceil();
+        let a = div_round(&self.lo, &other.hi, Round::Down).floor();
+        let b = div_round(&self.hi, &other.hi, Round::Up).ceil();
 
         // no intersection along y.hi edge
         if a == b {
@@ -920,6 +941,85 @@ impl Interval {
 
         }
     }
+
+    // mostly copied from fmod_pos
+    pub fn remainder_pos(&self, other: &Interval) -> Interval {
+        let a = div_round(&self.lo, &other.hi, Round::Down).floor();
+        let b = div_round(&self.hi, &other.hi, Round::Up).ceil();
+
+        // no intersection along y.hi edge
+        if a == b {
+            let mut c = self.hi.clone();
+            c.div_assign_round(other.hi.clone(), Round::Down);
+            let mut d = self.hi.clone();
+            d.div_assign_round(other.lo.clone(), Round::Up);
+
+            // no intersection along x.hi either; use top-left/bottom-right point
+            if c == d {
+                eprintln!("here");
+                let halfway = div_round(&other.hi, &bf(self.lo.prec(), 2.0), Round::Down);
+
+                let mut tmplo = c.clone();
+                tmplo.mul_sub_round(&other.hi, &self.lo, Round::Up);
+                tmplo = -tmplo;
+                // DIFFERENCE FROM fmod_pos
+                tmplo = tmplo.max(&-halfway.clone());
+
+                let mut tmphi = c;
+                tmphi.mul_sub_round(&other.lo, &self.hi, Round::Down);
+                tmphi = -tmphi;
+                // DIFFERENCE FROM fmod_pos
+                tmphi = tmphi.min(&halfway);
+
+                Interval {
+                    lo: tmplo,
+                    hi: tmphi,
+                    err: self.err.clone(),
+                }
+            } else {
+                eprintln!("there");
+                // DIFFERENCE FROM fmod_pos
+                // NOPE! need to subtract half.bf one way, add it another!
+                let y_hi = div_round(&div_round(&self.hi, &add_round(&c, &bf(self.lo.prec(), 0.5), Round::Down), Round::Down),
+                                     &bf(self.lo.prec(), 2.0), Round::Down);
+                let y_lo = sub_round(&self.lo, &mul_round(&c, &other.hi, Round::Down), Round::Down)
+                    .max(&-div_round(&other.hi, &bf(self.lo.prec(), 2.0), Round::Down));
+                
+                Interval {
+                    lo: y_lo.min(&-y_hi.clone()),
+                    hi: y_hi,
+                    err: self.err.clone(),
+                }
+            }
+        } else {
+            let y = div_round(&other.hi, &bf(self.lo.prec(), 2.0), Round::Up);
+            Interval {
+                // DIFFERENCE FROM fmod_pos
+                lo: -y.clone(),
+                hi: y,
+                err: self.err.clone(),
+            }
+        }
+    }
+
+    pub fn remainder(&self, other: &Interval) -> Interval {
+        let zero = bf(self.lo.prec(), 0.0);
+        let error = ErrorInterval {
+            lo: self.err.lo || other.err.lo || (self.lo <= zero && self.hi >= zero),
+            hi: self.err.lo || other.err.lo || (self.lo == zero && self.hi == zero),
+        };
+
+        let abs_other = other.fabs();
+
+        if self.hi <= zero {
+            self.neg().remainder_pos(&abs_other).neg().with_error(error)
+        } else if self.lo >= zero {
+            self.remainder_pos(&abs_other).with_error(error)
+        } else {
+            let (neg, pos) =  self.split(&zero).unwrap();
+            pos.remainder_pos(&abs_other).union(&neg.neg().remainder_pos(&abs_other).neg()).with_error(error)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -944,6 +1044,8 @@ mod tests {
             ("pow".into(), Interval::pow, |x, y| x.powf(y)),
             ("atan2".into(), Interval::atan2, |x, y| x.atan2(y)),
             ("fmod".into(), Interval::fmod, |x, y| x % y),
+            ("remainder".into(), Interval::remainder, |x, y| bf(53, x).remainder(&bf(53, y)
+        ).to_f64()),
         ];
         let single_operand_functions: Vec<(Symbol, SingleOperator, SingleFOperator)> = vec![
             (
