@@ -496,8 +496,9 @@ impl Interval {
     pub fn fma(&self, other: &Interval, third: &Interval) -> Interval {
         self.mul(other).add(third)   
     }
+    
 
-    pub fn cos(&self) -> Interval {
+    fn period_lower(&self, is_even: bool) -> Float {
         let mut lopi = Float::new(self.lo.prec());
         lopi.assign_round(Constant::Pi, Round::Down);
         let mut hipi = Float::new(self.lo.prec());
@@ -505,12 +506,39 @@ impl Interval {
         let zero = Float::with_val(self.lo.prec(), 0 as u64);
         
         let mut afactor = self.lo.clone();
-        afactor.div_assign_round(if self.lo < zero {lopi.clone()} else {hipi.clone()}, Round::Down);
+        afactor.div_assign_round(if self.lo < zero {lopi} else {hipi}, Round::Down);
+        if is_even {
+            afactor.mul_sub_round(&Float::with_val(self.lo.prec(), 1 as f64), &Float::with_val(self.lo.prec(), 0.5 as f64), Round::Down);
+        }
         afactor = afactor.floor();
+
+        afactor
+    }
+
+    fn period_higher(&self, is_even: bool) -> Float {
+        let mut lopi = Float::new(self.lo.prec());
+        lopi.assign_round(Constant::Pi, Round::Down);
+        let mut hipi = Float::new(self.lo.prec());
+        hipi.assign_round(Constant::Pi, Round::Up);
+        let zero = Float::with_val(self.lo.prec(), 0 as u64);
 
         let mut bfactor = self.hi.clone();
         bfactor.div_assign_round(if self.hi < zero {hipi} else {lopi}, Round::Up);
+        if is_even {
+            bfactor.mul_sub_round(&Float::with_val(self.hi.prec(), 1 as f64), &Float::with_val(self.hi.prec(), 0.5 as f64), Round::Up);
+        }
         bfactor = bfactor.ceil();
+        bfactor
+    }
+
+    pub fn cos(&self) -> Interval {
+        let mut lopi = Float::new(self.lo.prec());
+        lopi.assign_round(Constant::Pi, Round::Down);
+        let mut hipi = Float::new(self.lo.prec());
+        hipi.assign_round(Constant::Pi, Round::Up);
+        
+        let afactor = self.period_lower(false);
+        let bfactor = self.period_higher(false);
 
         if afactor == bfactor && is_even(&afactor) {
             let mut hitmp = self.hi.clone();
@@ -568,17 +596,9 @@ impl Interval {
         lopi.assign_round(Constant::Pi, Round::Down);
         let mut hipi = Float::new(self.lo.prec());
         hipi.assign_round(Constant::Pi, Round::Up);
-        let zero = Float::with_val(self.lo.prec(), 0 as u64);
 
-        let mut afactor = self.lo.clone();
-        afactor.div_assign_round(if self.lo < zero {lopi.clone()} else {hipi.clone()}, Round::Down);
-        afactor.mul_sub_round(&Float::with_val(self.lo.prec(), 1 as f64), &Float::with_val(self.lo.prec(), 0.5 as f64), Round::Down);
-        afactor = afactor.floor();
-
-        let mut bfactor = self.hi.clone();
-        bfactor.div_assign_round(if self.hi < zero {hipi} else {lopi}, Round::Up);
-        bfactor.mul_add_round(&Float::with_val(self.hi.prec(), 1 as f64), &Float::with_val(self.hi.prec(), 0.5 as f64), Round::Up);
-        bfactor = bfactor.ceil();
+        let afactor = self.period_lower(true);
+        let bfactor = self.period_higher(true);
 
         if afactor == bfactor && is_even(&afactor) {
             let mut hitmp = self.hi.clone();
@@ -628,6 +648,16 @@ impl Interval {
             }
         }
     }
+
+    /*pub fn tan(&self) -> Interval {
+        let mut lopi = Float::new(self.lo.prec());
+        lopi.assign_round(Constant::Pi, Round::Down);
+        let mut hipi = Float::new(self.lo.prec());
+        hipi.assign_round(Constant::Pi, Round::Up);
+
+        let mut afactor = self.period_lower(true);
+        let mut bfactor = self.period_lower(true);
+    }*/
 }
 
 #[cfg(test)]
