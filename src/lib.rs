@@ -649,15 +649,33 @@ impl Interval {
         }
     }
 
-    /*pub fn tan(&self) -> Interval {
+    pub fn tan(&self) -> Interval {
         let mut lopi = Float::new(self.lo.prec());
         lopi.assign_round(Constant::Pi, Round::Down);
         let mut hipi = Float::new(self.lo.prec());
         hipi.assign_round(Constant::Pi, Round::Up);
 
-        let mut afactor = self.period_lower(true);
-        let mut bfactor = self.period_lower(true);
-    }*/
+        let afactor = self.period_lower(true);
+        let bfactor = self.period_higher(true);
+
+        if afactor == bfactor {
+            let mut hitmp = self.hi.clone();
+            let mut lotmp = self.lo.clone();
+            lotmp.tan_round(Round::Down);
+            hitmp.tan_round(Round::Up);
+            Interval {
+                lo: lotmp,
+                hi: hitmp,
+                err: self.err.clone(),
+            }
+        } else {
+            return Interval {
+                lo: Float::with_val(self.lo.prec(), f64::NEG_INFINITY),
+                hi: Float::with_val(self.lo.prec(), f64::INFINITY),
+                err: self.err.clone(),
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -698,6 +716,7 @@ mod tests {
             ("cbrt".into(), Interval::cbrt, |x| x.cbrt()),
             ("sin".into(), Interval::sin, |x| x.sin()),
             ("cos".into(), Interval::cos, |x| x.cos()),
+            ("tan".into(), Interval::tan, |x| x.tan()),
         ];
         let mut rng = rand::thread_rng();
 
