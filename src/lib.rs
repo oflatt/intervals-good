@@ -1,5 +1,5 @@
 use core::cmp::Ordering;
-use rug::{float::Constant, ops::PowAssignRound, float::Round, float::Special, ops::DivAssignRound, Float};
+use rug::{float::Constant, ops::PowAssignRound, float::Round, float::Special, ops::DivAssignRound, Float, ops::AssignRound};
 use egg::Symbol;
 
 enum IntervalClassification {
@@ -30,6 +30,32 @@ pub struct BooleanInterval {
     pub err: ErrorInterval,
 }
 
+impl BooleanInterval {
+    pub fn and(&self, other: &BooleanInterval) -> BooleanInterval {
+        BooleanInterval {
+            lo: self.lo && other.lo,
+            hi: self.hi && other.hi,
+            err: self.err.union(&other.err),
+        }
+    }
+
+    pub fn or(&self, other: &BooleanInterval) -> BooleanInterval {
+        BooleanInterval {
+            lo: self.lo || other.lo,
+            hi: self.hi || other.hi,
+            err: self.err.union(&other.err),
+        }
+    }
+
+    pub fn not(&self) -> BooleanInterval {
+        BooleanInterval {
+            lo: !self.hi,
+            hi: !self.lo,
+            err: self.err.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Interval {
     pub lo: Float,
@@ -37,7 +63,7 @@ pub struct Interval {
     pub err: ErrorInterval,
 }
 
-pub(crate) fn is_even(val: Float) -> bool {
+pub(crate) fn is_even(val: &Float) -> bool {
     if let Some(int) = val.to_integer() {
         int.is_even()
     } else {
@@ -45,7 +71,7 @@ pub(crate) fn is_even(val: Float) -> bool {
     }
 }
 
-pub(crate) fn is_odd(val: Float) -> bool {
+pub(crate) fn is_odd(val: &Float) -> bool {
     if let Some(int) = val.to_integer() {
         int.is_odd()
     } else {
@@ -247,22 +273,34 @@ impl Interval {
 
     pub fn round_nearest_int(&self) -> Interval {
         Interval {
-            lo: self.lo.clone().round(),
-            hi: self.hi.clone().round(),
+            lo: self.lo.clone().floor(),
+            hi: self.hi.clone().ceil(),
             err: self.err.clone(),
         }
     }
 
     pub fn ceil(&self) -> Interval {
-        self.monotonic(|x, _| x.clone().ceil())
+        Interval {
+            lo: self.lo.clone().floor(),
+            hi: self.hi.clone().ceil(),
+            err: self.err.clone(),
+        }
     }
 
     pub fn floor(&self) -> Interval {
-        self.monotonic(|x, _| x.clone().floor())
+        Interval {
+            lo: self.lo.clone().floor(),
+            hi: self.hi.clone().ceil(),
+            err: self.err.clone(),
+        }
     }
 
     pub fn trunc(&self) -> Interval {
-        self.monotonic(|x, _| x.clone().trunc())
+        Interval {
+            lo: self.lo.clone().floor(),
+            hi: self.hi.clone().ceil(),
+            err: self.err.clone(),
+        }
     }
 
     pub fn fabs(&self) -> Interval {
@@ -454,6 +492,142 @@ impl Interval {
             neg.pow_neg(other).union(&pos.pow_pos(&other))
         }
     }
+
+    pub fn fma(&self, other: &Interval, third: &Interval) -> Interval {
+        self.mul(other).add(third)   
+    }
+
+    pub fn cos(&self) -> Interval {
+        let mut lopi = Float::new(self.lo.prec());
+        lopi.assign_round(Constant::Pi, Round::Down);
+        let mut hipi = Float::new(self.lo.prec());
+        hipi.assign_round(Constant::Pi, Round::Up);
+        let zero = Float::with_val(self.lo.prec(), 0 as u64);
+        
+        let mut afactor = self.lo.clone();
+        afactor.div_assign_round(if self.lo < zero {lopi.clone()} else {hipi.clone()}, Round::Down);
+        afactor = afactor.floor();
+
+        let mut bfactor = self.hi.clone();
+        bfactor.div_assign_round(if self.hi < zero {hipi} else {lopi}, Round::Up);
+        bfactor = bfactor.ceil();
+
+        if afactor == bfactor && is_even(&afactor) {
+            let mut hitmp = self.hi.clone();
+            let mut lotmp = self.lo.clone();
+            hitmp.cos_round(Round::Down);
+            lotmp.cos_round(Round::Up);
+            Interval {
+                lo: hitmp,
+                hi: lotmp,
+                err: self.err.clone(),
+            }
+        } else if afactor == bfactor && is_odd(&afactor) {
+            let mut hitmp = self.hi.clone();
+            let mut lotmp = self.lo.clone();
+            hitmp.cos_round(Round::Up);
+            lotmp.cos_round(Round::Down);
+            Interval {
+                lo: lotmp,
+                hi: hitmp,
+                err: self.err.clone(),
+            }
+        } else if (bfactor.clone() - afactor.clone()) == (1 as u64) && is_even(&afactor) {
+            let mut lotmp = self.lo.clone();
+            lotmp.cos_round(Round::Up);
+            let mut hitmp = self.hi.clone();
+            hitmp.cos_round(Round::Up);
+            Interval {
+                lo: Float::with_val(self.lo.prec(), -1 as i64),
+                hi: lotmp.max(&hitmp),
+                err: self.err.clone(),
+            }
+        } else if (bfactor.clone() - afactor.clone()) == (1 as u64) && is_odd(&afactor) {
+            let mut lotmp = self.lo.clone();
+            lotmp.cos_round(Round::Down);
+            let mut hitmp = self.hi.clone();
+            hitmp.cos_round(Round::Down);
+            Interval {
+                lo: lotmp.min(&hitmp),
+                hi: Float::with_val(self.lo.prec(), 1 as i64),
+                err: self.err.clone(),
+            
+
+            }
+        } else {
+            return Interval {
+                lo: Float::with_val(self.lo.prec(), -1 as i64),
+                hi: Float::with_val(self.lo.prec(), 1 as u64),
+                err: self.err.clone(),
+            };
+        }
+    }
+
+    pub fn sin(&self) -> Interval {
+        let mut lopi = Float::new(self.lo.prec());
+        lopi.assign_round(Constant::Pi, Round::Down);
+        let mut hipi = Float::new(self.lo.prec());
+        hipi.assign_round(Constant::Pi, Round::Up);
+        let zero = Float::with_val(self.lo.prec(), 0 as u64);
+
+        let mut afactor = self.lo.clone();
+        afactor.div_assign_round(if self.lo < zero {lopi.clone()} else {hipi.clone()}, Round::Down);
+        afactor.mul_sub_round(&Float::with_val(self.lo.prec(), 1 as f64), &Float::with_val(self.lo.prec(), 0.5 as f64), Round::Down);
+        afactor = afactor.floor();
+
+        let mut bfactor = self.hi.clone();
+        bfactor.div_assign_round(if self.hi < zero {hipi} else {lopi}, Round::Up);
+        bfactor.mul_add_round(&Float::with_val(self.hi.prec(), 1 as f64), &Float::with_val(self.hi.prec(), 0.5 as f64), Round::Up);
+        bfactor = bfactor.ceil();
+
+        if afactor == bfactor && is_even(&afactor) {
+            let mut hitmp = self.hi.clone();
+            let mut lotmp = self.lo.clone();
+            hitmp.sin_round(Round::Down);
+            lotmp.sin_round(Round::Up);
+            Interval {
+                lo: hitmp,
+                hi: lotmp,
+                err: self.err.clone(),
+            }
+        } else if afactor == bfactor && is_odd(&afactor) {
+            let mut hitmp = self.hi.clone();
+            let mut lotmp = self.lo.clone();
+            hitmp.sin_round(Round::Up);
+            lotmp.sin_round(Round::Down);
+            Interval {
+                lo: lotmp,
+                hi: hitmp,
+                err: self.err.clone(),
+            }
+        } else if (bfactor.clone() - afactor.clone()) == (1 as u64) && is_even(&afactor) {
+            let mut lotmp = self.lo.clone();
+            lotmp.sin_round(Round::Up);
+            let mut hitmp = self.hi.clone();
+            hitmp.sin_round(Round::Up);
+            Interval {
+                lo: Float::with_val(self.lo.prec(), -1 as i64),
+                hi: lotmp.max(&hitmp),
+                err: self.err.clone(),
+            }
+        } else if (bfactor.clone() - afactor.clone()) == (1 as u64) && is_odd(&afactor) {
+            let mut lotmp = self.lo.clone();
+            lotmp.sin_round(Round::Down);
+            let mut hitmp = self.hi.clone();
+            hitmp.sin_round(Round::Down);
+            Interval {
+                lo: lotmp.min(&hitmp),
+                hi: Float::with_val(self.lo.prec(), 1 as i64),
+                err: self.err.clone(),
+            }
+        } else {
+            return Interval {
+                lo: Float::with_val(self.lo.prec(), -1 as i64),
+                hi: Float::with_val(self.lo.prec(), 1 as u64),
+                err: self.err.clone(),
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -492,6 +666,8 @@ mod tests {
             ("ln_1p".into(), Interval::ln_1p, |x| x.ln_1p()),
             ("sqrt".into(), Interval::sqrt, |x| x.sqrt()),
             ("cbrt".into(), Interval::cbrt, |x| x.cbrt()),
+            ("sin".into(), Interval::sin, |x| x.sin()),
+            ("cos".into(), Interval::cos, |x| x.cos()),
         ];
         let mut rng = rand::thread_rng();
 
