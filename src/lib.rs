@@ -2,8 +2,10 @@ use core::cmp::Ordering;
 use egg::Symbol;
 use rug::{
     float::Constant, float::Round, float::Special, ops::AssignRound, ops::DivAssignRound,
-    ops::PowAssignRound, Float,
+    ops::PowAssignRound, Float, ops::Pow
 };
+
+const F64_PREC: u32 = 53;
 
 enum IntervalClassification {
     StrictlyPos,
@@ -11,9 +13,12 @@ enum IntervalClassification {
     Mixed,
 }
 
+/// The `lo` field represents whether the computation must error.
+/// The `hi` field represents whether the computation may error.
 #[derive(Debug, Clone)]
 pub struct ErrorInterval {
     pub lo: bool,
+    // the 
     pub hi: bool,
 }
 
@@ -21,7 +26,7 @@ impl ErrorInterval {
     pub fn union(&self, other: &ErrorInterval) -> ErrorInterval {
         ErrorInterval {
             lo: self.lo || other.lo,
-            hi: self.hi && other.hi,
+            hi: self.hi || other.hi,
         }
     }
 }
@@ -55,6 +60,42 @@ impl BooleanInterval {
             lo: !self.hi,
             hi: !self.lo,
             err: self.err.clone(),
+        }
+    }
+
+    pub fn if_real_result(&self, other: &Interval, third: &Interval) -> Interval {
+        if self.lo {
+            other.with_error(self.err.union(&other.err))
+        } else if !self.hi {
+            third.with_error(self.err.union(&third.err))
+        } else {
+            other.union(third)
+        }
+    }
+
+    pub fn union(&self, other: &BooleanInterval) -> BooleanInterval {
+        BooleanInterval {
+            lo: self.lo || other.lo,
+            hi: self.hi || other.hi,
+            err: self.err.union(&other.err),
+        }
+    }
+
+    fn with_error(&self, err: ErrorInterval) -> BooleanInterval {
+        BooleanInterval {
+            lo: self.lo,
+            hi: self.hi,
+            err,
+        }
+    }
+
+    pub fn if_boolean_result(&self, other: &BooleanInterval, third: &BooleanInterval) -> BooleanInterval {
+        if self.lo {
+            other.with_error(self.err.union(&other.err))
+        } else if !self.hi {
+            third.with_error(self.err.union(&third.err))
+        } else {
+            other.union(third)
         }
     }
 }
@@ -134,7 +175,7 @@ impl Interval {
     }
 
     fn classify(&self) -> IntervalClassification {
-        self.classify_with(&bf(53, 0.0))
+        self.classify_with(&bf(F64_PREC, 0.0))
     }
 
     pub fn union(&self, other: &Interval) -> Interval {
@@ -224,8 +265,8 @@ impl Interval {
     pub fn div(&self, other: &Interval) -> Interval {
         let zero = bf(other.lo.prec(), 0.0);
         let error = ErrorInterval {
-            lo: self.err.lo || other.err.lo || (other.lo <= zero && other.hi >= zero),
-            hi: self.err.hi || other.err.hi || other.get_const() == Some(zero),
+            lo: self.err.lo || other.err.lo || other.get_const() == Some(zero.clone()),
+            hi: self.err.hi || other.err.hi || (other.lo <= zero && other.hi >= zero),
         };
 
         let perform_div = |lo1: &Float, lo2: &Float, hi1: &Float, hi2: &Float| {
@@ -314,13 +355,13 @@ impl Interval {
             lo: self.lo.clone().max(lo).min(hi),
             hi: self.hi.clone().min(hi).max(lo),
             err: ErrorInterval {
-                lo: self.err.lo || &self.lo < lo || &self.hi > hi,
-                hi: self.err.hi || &self.hi < lo || &self.lo > hi,
+                lo: self.err.lo || &self.hi < lo || &self.lo > hi,
+                hi: self.err.hi || &self.lo < lo || &self.hi > hi,
             },
         }
     }
 
-    pub fn round_nearest_int(&self) -> Interval {
+    pub fn round(&self) -> Interval {
         Interval {
             lo: self.lo.clone().floor(),
             hi: self.hi.clone().ceil(),
@@ -485,8 +526,8 @@ impl Interval {
         let zero: Float = bf(self.lo.prec(), 0.0);
 
         let error = ErrorInterval {
-            lo: self.err.lo || other.err.lo || other.lo < other.hi,
-            hi: self.err.hi || other.err.hi,
+            lo: self.err.lo || other.err.lo,
+            hi: self.err.hi || other.err.hi || other.lo < other.hi,
         };
         if pow_floor < pow_ceil {
             if self.hi == zero {
@@ -494,8 +535,8 @@ impl Interval {
                     lo: zero.clone(),
                     hi: zero,
                     err: ErrorInterval {
-                        lo: true,
-                        hi: self.err.hi.clone(),
+                        lo: self.err.lo,
+                        hi: true,
                     },
                 }
             } else {
@@ -805,10 +846,9 @@ impl Interval {
                     lo: -hipi.clone(),
                     hi: hipi,
                     err: ErrorInterval {
-                        lo: self.err.lo || other.err.lo || self.hi >= zero,
-                        hi: self.err.lo
-                            || other.err.lo
-                            || (self.lo == 0 && self.hi == 0 && other.lo == 0 && other.hi == 0),
+                        lo: self.err.lo || other.err.lo || other.err.lo
+                        || (self.lo == 0 && self.hi == 0 && other.lo == 0 && other.hi == 0),
+                        hi: self.err.lo || self.hi >= zero,
                     },
                 }
             }
@@ -925,8 +965,8 @@ impl Interval {
     pub fn fmod(&self, other: &Interval) -> Interval {
         let zero = bf(self.lo.prec(), 0.0);
         let error = ErrorInterval {
-            lo: self.err.lo || other.err.lo || (self.lo <= zero && self.hi >= zero),
-            hi: self.err.lo || other.err.lo || (self.lo == zero && self.hi == zero),
+            lo: self.err.lo || other.err.lo || (self.lo == zero && self.hi == zero),
+            hi: self.err.lo || other.err.lo || (self.lo <= zero && self.hi >= zero),
         };
 
         let abs_other = other.fabs();
@@ -956,7 +996,6 @@ impl Interval {
 
             // no intersection along x.hi either; use top-left/bottom-right point
             if c == d {
-                eprintln!("here");
                 let halfway = div_round(&other.hi, &bf(self.lo.prec(), 2.0), Round::Down);
 
                 let mut tmplo = c.clone();
@@ -977,7 +1016,6 @@ impl Interval {
                     err: self.err.clone(),
                 }
             } else {
-                eprintln!("there");
                 // DIFFERENCE FROM fmod_pos
                 // NOPE! need to subtract half.bf one way, add it another!
                 let y_hi = div_round(&div_round(&self.hi, &add_round(&c, &bf(self.lo.prec(), 0.5), Round::Down), Round::Down),
@@ -1005,8 +1043,8 @@ impl Interval {
     pub fn remainder(&self, other: &Interval) -> Interval {
         let zero = bf(self.lo.prec(), 0.0);
         let error = ErrorInterval {
-            lo: self.err.lo || other.err.lo || (self.lo <= zero && self.hi >= zero),
-            hi: self.err.lo || other.err.lo || (self.lo == zero && self.hi == zero),
+            lo: self.err.lo || other.err.lo || (self.lo == zero && self.hi == zero),
+            hi: self.err.lo || other.err.lo || (self.lo <= zero && self.hi >= zero),
         };
 
         let abs_other = other.fabs();
@@ -1020,6 +1058,88 @@ impl Interval {
             pos.remainder_pos(&abs_other).union(&neg.neg().remainder_pos(&abs_other).neg()).with_error(error)
         }
     }
+
+    pub fn erf(&self) -> Interval {
+        self.monotonic_mut(Float::erf_round)
+    }
+
+    pub fn erfc(&self) -> Interval {
+        self.comonotonic_mut(Float::erfc_round)
+    }
+
+    pub fn cmp(&self, other: &Interval) -> (bool, bool, bool, bool) {
+        (self.lo < other.hi, self.hi < other.lo, self.hi > other.lo, self.lo > other.hi)
+    }
+
+    pub fn less_than(&self, other: &Interval) -> BooleanInterval {
+        let (can_less, must_less, _can_greater, _must_greater) = self.cmp(other);
+        BooleanInterval {
+            lo: must_less,
+            hi: can_less,
+            err: self.err.union(&other.err),
+        }
+    }
+
+    pub fn less_than_or_equal(&self, other: &Interval) -> BooleanInterval {
+        let (_can_less, _must_less, can_greater, must_greater) = self.cmp(other);
+        BooleanInterval {
+            lo: !can_greater,
+            hi: !must_greater,
+            err: self.err.union(&other.err),
+        }
+    }
+
+    pub fn greater_than(&self, other: &Interval) -> BooleanInterval {
+        let (_can_less, _must_less, can_greater, must_greater) = self.cmp(other);
+        BooleanInterval {
+            lo: must_greater,
+            hi: can_greater,
+            err: self.err.union(&other.err),
+        }
+    }
+
+    pub fn greater_than_or_equal(&self, other: &Interval) -> BooleanInterval {
+        let (can_less, must_less, _can_greater, _must_greater) = self.cmp(other);
+        BooleanInterval {
+            lo: !can_less,
+            hi: !must_less,
+            err: self.err.union(&other.err),
+        }
+    }
+
+    pub fn equal_to(&self, other: &Interval) -> BooleanInterval {
+        let (can_less, must_less, can_greater, must_greater) = self.cmp(other);
+        BooleanInterval {
+            lo: !can_less && !can_greater,
+            hi: !must_less && !must_greater,
+            err: self.err.union(&other.err),
+        }
+    }
+
+    pub fn not_equal_to(&self, other: &Interval) -> BooleanInterval {
+        let (can_less, must_less, can_greater, must_greater) = self.cmp(other);
+        BooleanInterval {
+            lo: must_less || must_greater,
+            hi: can_less || can_greater,
+            err: self.err.union(&other.err),
+        }
+    }
+
+    pub fn fmin(&self, other: &Interval) -> Interval {
+        Interval {
+            lo: self.lo.clone().min(&other.lo),
+            hi: self.hi.clone().min(&other.hi),
+            err: self.err.union(&other.err),
+        }
+    }
+
+    pub fn fmax(&self, other: &Interval) -> Interval {
+        Interval {
+            lo: self.lo.clone().max(&other.lo),
+            hi: self.hi.clone().max(&other.hi),
+            err: self.err.union(&other.err),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1028,78 +1148,113 @@ mod tests {
     use rand;
     use rand::Rng;
     use std::ops::Add;
+    use rug::ops::Pow;
+
+    fn random_interval() -> Interval {
+        let mut rng = rand::thread_rng();
+        let lo: f64 = rng.gen_range(-40.0..40.0);
+        let hi = rng.gen_range(lo..41.0);
+        Interval::new(F64_PREC, lo, hi)
+    }
 
     #[test]
     fn smaller_intervals_refine() {
         type Operator = fn(&Interval, &Interval) -> Interval;
         type SingleOperator = fn(&Interval) -> Interval;
-        type FOperator = fn(f64, f64) -> f64;
-        type SingleFOperator = fn(f64) -> f64;
+        type FOperator = fn(Float, &Float) -> Float;
+        type SingleFOperator = fn(Float) -> Float;
+        type FloatToBool = fn(&Interval, &Interval) -> BooleanInterval;
+        type SingleFloatToBool = fn(&Interval) -> BooleanInterval;
+        type FFloatToBool = fn(Float, &Float) -> bool;
+        type SingleFFloatToBool = fn(Float) -> bool;
+
         let interval_functions: Vec<(Symbol, Operator, FOperator)> = vec![
-            ("add".into(), Interval::add, std::ops::Add::add),
-            ("sub".into(), Interval::sub, std::ops::Sub::sub),
-            ("mul".into(), Interval::mul, std::ops::Mul::mul),
-            ("div".into(), Interval::div, std::ops::Div::div),
+            ("add".into(), Interval::add, |x, y| x + y),
+            ("sub".into(), Interval::sub, |x, y| x - y),
+            ("mul".into(), Interval::mul, |x, y| x * y),
+            ("div".into(), Interval::div, |x, y| x / y),
             ("hypot".into(), Interval::hypot, |x, y| x.hypot(y)),
-            ("pow".into(), Interval::pow, |x, y| x.powf(y)),
-            ("atan2".into(), Interval::atan2, |x, y| x.atan2(y)),
+            ("pow".into(), Interval::pow, |x, y| x.pow(y)),
+            ("atan2".into(), Interval::atan2, Float::atan2),
             ("fmod".into(), Interval::fmod, |x, y| x % y),
-            ("remainder".into(), Interval::remainder, |x, y| bf(53, x).remainder(&bf(53, y)
-        ).to_f64()),
+            ("remainder".into(), Interval::remainder, |x, y| x.remainder(y)),
+            ("fmin".into(), Interval::fmin, |x, y| x.min(y)),
+            ("fmax".into(), Interval::fmax, |x, y| x.max(y)),
+        ];
+        let to_boolean_functions: Vec<(Symbol, FloatToBool, FFloatToBool)> = vec![
+            ("less_than".into(), Interval::less_than, |x, y| &x < y),
+            ("less_than_or_equal".into(), Interval::less_than_or_equal, |x, y| &x <= y),
+            ("greater_than".into(), Interval::greater_than, |x, y| &x > y),
+            ("greater_than_or_equal".into(), Interval::greater_than_or_equal, |x, y| &x >= y),
+            ("equal_to".into(), Interval::equal_to, |x, y| &x == y),
         ];
         let single_operand_functions: Vec<(Symbol, SingleOperator, SingleFOperator)> = vec![
             (
-                "round_nearest_int".into(),
-                Interval::round_nearest_int,
+                "round".into(),
+                Interval::round,
                 |x| x.round(),
             ),
-            ("ceil".into(), Interval::ceil, |x| x.ceil()),
-            ("floor".into(), Interval::floor, |x| x.floor()),
-            ("trunc".into(), Interval::trunc, |x| x.trunc()),
-            ("fabs".into(), Interval::fabs, |x| x.abs()),
-            ("exp".into(), Interval::exp, |x| x.exp()),
-            ("exp_m1".into(), Interval::exp_m1, |x| x.exp_m1()),
-            ("exp2".into(), Interval::exp2, |x| x.exp2()),
-            ("ln".into(), Interval::ln, |x| x.ln()),
-            ("log10".into(), Interval::log10, |x| x.log10()),
-            ("log2".into(), Interval::log2, |x| x.log2()),
-            ("ln_1p".into(), Interval::ln_1p, |x| x.ln_1p()),
-            ("sqrt".into(), Interval::sqrt, |x| x.sqrt()),
-            ("cbrt".into(), Interval::cbrt, |x| x.cbrt()),
-            ("sin".into(), Interval::sin, |x| x.sin()),
-            ("cos".into(), Interval::cos, |x| x.cos()),
-            ("tan".into(), Interval::tan, |x| x.tan()),
-            ("asin".into(), Interval::asin, |x| x.asin()),
-            ("acos".into(), Interval::acos, |x| x.acos()),
-            ("atan".into(), Interval::atan, |x| x.atan()),
-            ("sinh".into(), Interval::sinh, |x| x.sinh()),
-            ("cosh".into(), Interval::cosh, |x| x.cosh()),
-            ("tanh".into(), Interval::tanh, |x| x.tanh()),
-            ("asinh".into(), Interval::asinh, |x| x.asinh()),
-            ("acosh".into(), Interval::acosh, |x| x.acosh()),
-            ("atanh".into(), Interval::atanh, |x| x.atanh()),
+            ("ceil".into(), Interval::ceil, Float::ceil),
+            ("floor".into(), Interval::floor, Float::floor),
+            ("trunc".into(), Interval::trunc, Float::trunc),
+            ("fabs".into(), Interval::fabs, Float::abs),
+            ("sqrt".into(), Interval::sqrt, Float::sqrt),
+            ("exp".into(), Interval::exp, Float::exp),
+            ("exp_m1".into(), Interval::exp_m1, Float::exp_m1),
+            ("exp2".into(), Interval::exp2, Float::exp2),
+            ("ln".into(), Interval::ln, Float::ln),
+            ("ln_1p".into(), Interval::ln_1p, Float::ln_1p),
+            ("log2".into(), Interval::log2, Float::log2),
+            ("log10".into(), Interval::log10, Float::log10),
+            ("cbrt".into(), Interval::cbrt, Float::cbrt),
+            ("sin".into(), Interval::sin, Float::sin),
+            ("cos".into(), Interval::cos, Float::cos),
+            ("tan".into(), Interval::tan, Float::tan),
+            ("asin".into(), Interval::asin, Float::asin),
+            ("acos".into(), Interval::acos, Float::acos),
+            ("atan".into(), Interval::atan, Float::atan),
+            ("sinh".into(), Interval::sinh, Float::sinh),
+            ("cosh".into(), Interval::cosh, Float::cosh),
+            ("tanh".into(), Interval::tanh, Float::tanh),
+            ("asinh".into(), Interval::asinh, Float::asinh),
+            ("acosh".into(), Interval::acosh, Float::acosh),
+            ("atanh".into(), Interval::atanh, Float::atanh),
+            ("erf".into(), Interval::erf, Float::erf),
+            ("erfc".into(), Interval::erfc, Float::erfc),
         ];
         let mut rng = rand::thread_rng();
 
-        for _i in 0..50000 {
-            for (name, ifun, realfun) in &interval_functions {
-                let lo1 = rng.gen_range(-40.0..40.0);
-                let lo2 = rng.gen_range(lo1..41.0);
-                let ival1 = Interval::new(53, lo1, lo2);
-                let hi1 = rng.gen_range(-40.0..40.0);
-                let hi2 = rng.gen_range(hi1..41.0);
-                let ival2 = Interval::new(53, hi1, hi2);
+        for _i in 0..200_000 {
+            for (name, ifun, realfun) in &to_boolean_functions {
+                let ival1 = random_interval();
+                let ival2 = random_interval();
 
-                let realval1 = rng.gen_range(lo1..lo2);
-                let realval2 = rng.gen_range(hi1..hi2);
+                let realval1 = rng.gen_range(ival1.lo.to_f64()..ival1.hi.to_f64());
+                let realval2 = rng.gen_range(ival2.lo.to_f64()..ival2.hi.to_f64());
                 let finalival = ifun(&ival1, &ival2);
-                let finalreal = realfun(realval1, realval2);
+                let finalreal = realfun(bf(F64_PREC, realval1), &bf(F64_PREC, realval2));
+
+                if finalreal {
+                    assert!(finalival.hi, "Should have a possibility of true value for {}({:?} {:?})", name, ival1, ival2);
+                } else {
+                    assert!(!finalival.lo);
+                }
+            }
+
+            for (name, ifun, realfun) in &interval_functions {
+                let ival1 = random_interval();
+                let ival2 = random_interval();
+
+                let realval1 = rng.gen_range(ival1.lo.to_f64()..ival1.hi.to_f64());
+                let realval2 = rng.gen_range(ival2.lo.to_f64()..ival2.hi.to_f64());
+                let finalival = ifun(&ival1, &ival2);
+                let finalreal = realfun(bf(F64_PREC, realval1), &bf(F64_PREC, realval2));
 
                 if finalreal.is_nan() {
-                    assert!(finalival.err.lo);
+                    assert!(finalival.err.hi);
                 } else {
                     assert!(
-                        !finalival.err.hi,
+                        !finalival.err.lo,
                         "{} and {} gave us a guaranteed error for {}. Got: {}",
                         realval1, realval2, name, finalreal
                     );
@@ -1127,15 +1282,15 @@ mod tests {
             for (name, ifun, realfun) in &single_operand_functions {
                 let lo1 = rng.gen_range(-40.0..40.0);
                 let hi1 = rng.gen_range(lo1..41.0);
-                let ival1 = Interval::new(53, lo1, hi1);
+                let ival1 = Interval::new(F64_PREC, lo1, hi1);
                 let realval1 = rng.gen_range(lo1..hi1);
                 let finalival = ifun(&ival1);
-                let finalreal = realfun(realval1);
+                let finalreal = realfun(bf(F64_PREC, realval1));
 
                 if finalreal.is_nan() {
-                    assert!(finalival.err.lo);
+                    assert!(finalival.err.hi);
                 } else {
-                    assert!(!finalival.err.hi);
+                    assert!(!finalival.err.lo);
                     assert!(
                         finalreal <= finalival.hi.clone(),
                         "{}: {} <= {}",
