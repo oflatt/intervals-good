@@ -1,9 +1,6 @@
-use core::cmp::Ordering;
-use core::cmp::Ord;
-use egg::Symbol;
 use rug::{
-    float::Constant, float::Round, float::Special, ops::AssignRound, ops::DivAssignRound,
-    ops::PowAssignRound, Float, ops::Pow
+    float::Constant, float::Round, ops::AssignRound, ops::DivAssignRound, ops::PowAssignRound,
+    Float,
 };
 
 const F64_PREC: u32 = 53;
@@ -19,7 +16,7 @@ enum IntervalClassification {
 #[derive(Debug, Clone)]
 pub struct ErrorInterval {
     pub lo: bool,
-    // the 
+    // the
     pub hi: bool,
 }
 
@@ -90,7 +87,11 @@ impl BooleanInterval {
         }
     }
 
-    pub fn if_boolean_result(&self, other: &BooleanInterval, third: &BooleanInterval) -> BooleanInterval {
+    pub fn if_boolean_result(
+        &self,
+        other: &BooleanInterval,
+        third: &BooleanInterval,
+    ) -> BooleanInterval {
         if self.lo {
             other.with_error(self.err.union(&other.err))
         } else if !self.hi {
@@ -151,7 +152,6 @@ pub(crate) fn mul_round(a: &Float, b: &Float, round: Round) -> Float {
     tmp.mul_add_round(b, &bf(a.prec(), 0.0), round);
     tmp
 }
-
 
 impl Interval {
     pub fn new(prec: u32, lo: f64, hi: f64) -> Interval {
@@ -299,22 +299,6 @@ impl Interval {
         }
     }
 
-    fn monotonic(&self, fun: fn(&Float, Round) -> Float) -> Interval {
-        let tmplo = fun(&self.lo, Round::Down);
-        let tmphi = fun(&self.hi, Round::Up);
-        if tmplo.is_nan() {
-            panic!("monotonic: lo is NaN");
-        }
-        if tmphi.is_nan() {
-            panic!("monotonic: hi is NaN");
-        }
-        Interval {
-            lo: tmplo,
-            hi: tmphi,
-            err: self.err.clone(),
-        }
-    }
-
     fn monotonic_mut(&self, fun: fn(&mut Float, Round) -> std::cmp::Ordering) -> Interval {
         let mut tmplo = self.lo.clone();
         let mut tmphi = self.hi.clone();
@@ -422,27 +406,18 @@ impl Interval {
     }
 
     pub fn ln(&self) -> Interval {
-        self.clamp(
-            &bf(self.lo.prec(), 0.0),
-            &bf(self.lo.prec(), f64::INFINITY),
-        )
-        .monotonic_mut(Float::ln_round)
+        self.clamp(&bf(self.lo.prec(), 0.0), &bf(self.lo.prec(), f64::INFINITY))
+            .monotonic_mut(Float::ln_round)
     }
 
     pub fn log10(&self) -> Interval {
-        self.clamp(
-            &bf(self.lo.prec(), 0.0),
-            &bf(self.lo.prec(), f64::INFINITY),
-        )
-        .monotonic_mut(Float::log10_round)
+        self.clamp(&bf(self.lo.prec(), 0.0), &bf(self.lo.prec(), f64::INFINITY))
+            .monotonic_mut(Float::log10_round)
     }
 
     pub fn log2(&self) -> Interval {
-        self.clamp(
-            &bf(self.lo.prec(), 0.0),
-            &bf(self.lo.prec(), f64::INFINITY),
-        )
-        .monotonic_mut(Float::log2_round)
+        self.clamp(&bf(self.lo.prec(), 0.0), &bf(self.lo.prec(), f64::INFINITY))
+            .monotonic_mut(Float::log2_round)
     }
 
     pub fn ln_1p(&self) -> Interval {
@@ -454,11 +429,8 @@ impl Interval {
     }
 
     pub fn sqrt(&self) -> Interval {
-        self.clamp(
-            &bf(self.lo.prec(), 0.0),
-            &bf(self.lo.prec(), f64::INFINITY),
-        )
-        .monotonic_mut(Float::sqrt_round)
+        self.clamp(&bf(self.lo.prec(), 0.0), &bf(self.lo.prec(), f64::INFINITY))
+            .monotonic_mut(Float::sqrt_round)
     }
 
     pub fn cbrt(&self) -> Interval {
@@ -620,9 +592,7 @@ impl Interval {
         } else if self.lo >= bf(self.lo.prec(), 0.0) {
             self.pow_pos(&other)
         } else {
-            let (neg, pos) = self
-                .split(&bf(self.lo.prec(), 0.0))
-                .unwrap();
+            let (neg, pos) = self.split(&bf(self.lo.prec(), 0.0)).unwrap();
             neg.pow_neg(other).union(&pos.pow_pos(&other))
         }
     }
@@ -847,8 +817,10 @@ impl Interval {
                     lo: -hipi.clone(),
                     hi: hipi,
                     err: ErrorInterval {
-                        lo: self.err.lo || other.err.lo || other.err.lo
-                        || (self.lo == 0 && self.hi == 0 && other.lo == 0 && other.hi == 0),
+                        lo: self.err.lo
+                            || other.err.lo
+                            || other.err.lo
+                            || (self.lo == 0 && self.hi == 0 && other.lo == 0 && other.hi == 0),
                         hi: self.err.lo || self.hi >= zero,
                     },
                 }
@@ -873,35 +845,23 @@ impl Interval {
     }
 
     pub fn acosh(&self) -> Interval {
-        self.clamp(
-            &bf(self.lo.prec(), 1.0),
-            &bf(self.lo.prec(), f64::INFINITY),
-        )
-        .monotonic_mut(Float::acosh_round)
+        self.clamp(&bf(self.lo.prec(), 1.0), &bf(self.lo.prec(), f64::INFINITY))
+            .monotonic_mut(Float::acosh_round)
     }
 
     pub fn atanh(&self) -> Interval {
-        self.clamp(
-            &bf(self.lo.prec(), -1.0),
-            &bf(self.lo.prec(), 1.0),
-        )
-        .monotonic_mut(Float::atanh_round)
+        self.clamp(&bf(self.lo.prec(), -1.0), &bf(self.lo.prec(), 1.0))
+            .monotonic_mut(Float::atanh_round)
     }
 
     pub fn asin(&self) -> Interval {
-        self.clamp(
-            &bf(self.lo.prec(), -1.0),
-            &bf(self.lo.prec(), 1.0),
-        )
-        .monotonic_mut(Float::asin_round)
+        self.clamp(&bf(self.lo.prec(), -1.0), &bf(self.lo.prec(), 1.0))
+            .monotonic_mut(Float::asin_round)
     }
 
     pub fn acos(&self) -> Interval {
-        self.clamp(
-            &bf(self.lo.prec(), -1.0),
-            &bf(self.lo.prec(), 1.0),
-        )
-        .comonotonic_mut(Float::acos_round)
+        self.clamp(&bf(self.lo.prec(), -1.0), &bf(self.lo.prec(), 1.0))
+            .comonotonic_mut(Float::acos_round)
     }
 
     pub fn atan(&self) -> Interval {
@@ -936,7 +896,11 @@ impl Interval {
                 }
             } else {
                 let mut cplusone = c.clone();
-                cplusone.mul_add_round(&bf(self.lo.prec(), 1.0),  &bf(self.lo.prec(), 1.0), Round::Down);
+                cplusone.mul_add_round(
+                    &bf(self.lo.prec(), 1.0),
+                    &bf(self.lo.prec(), 1.0),
+                    Round::Down,
+                );
                 let mut tmphi = self.hi.clone();
                 tmphi.div_assign_round(cplusone, Round::Up);
                 Interval {
@@ -952,7 +916,6 @@ impl Interval {
                 err: self.err.clone(),
             };
         }
-
     }
 
     fn with_error(&self, err: ErrorInterval) -> Interval {
@@ -977,9 +940,10 @@ impl Interval {
         } else if self.lo >= zero {
             self.fmod_pos(&abs_other).with_error(error)
         } else {
-            let (neg, pos) =  self.split(&zero).unwrap();
-            pos.fmod_pos(&abs_other).union(&neg.neg().fmod_pos(&abs_other).neg()).with_error(error)
-
+            let (neg, pos) = self.split(&zero).unwrap();
+            pos.fmod_pos(&abs_other)
+                .union(&neg.neg().fmod_pos(&abs_other).neg())
+                .with_error(error)
         }
     }
 
@@ -1019,11 +983,26 @@ impl Interval {
             } else {
                 // DIFFERENCE FROM fmod_pos
                 // NOPE! need to subtract half.bf one way, add it another!
-                let y_hi = div_round(&div_round(&self.hi, &add_round(&c, &bf(self.lo.prec(), 0.5), Round::Down), Round::Down),
-                                     &bf(self.lo.prec(), 2.0), Round::Down);
-                let y_lo = sub_round(&self.lo, &mul_round(&c, &other.hi, Round::Down), Round::Down)
-                    .max(&-div_round(&other.hi, &bf(self.lo.prec(), 2.0), Round::Down));
-                
+                let y_hi = div_round(
+                    &div_round(
+                        &self.hi,
+                        &add_round(&c, &bf(self.lo.prec(), 0.5), Round::Down),
+                        Round::Down,
+                    ),
+                    &bf(self.lo.prec(), 2.0),
+                    Round::Down,
+                );
+                let y_lo = sub_round(
+                    &self.lo,
+                    &mul_round(&c, &other.hi, Round::Down),
+                    Round::Down,
+                )
+                .max(&-div_round(
+                    &other.hi,
+                    &bf(self.lo.prec(), 2.0),
+                    Round::Down,
+                ));
+
                 Interval {
                     lo: y_lo.min(&-y_hi.clone()),
                     hi: y_hi,
@@ -1055,8 +1034,10 @@ impl Interval {
         } else if self.lo >= zero {
             self.remainder_pos(&abs_other).with_error(error)
         } else {
-            let (neg, pos) =  self.split(&zero).unwrap();
-            pos.remainder_pos(&abs_other).union(&neg.neg().remainder_pos(&abs_other).neg()).with_error(error)
+            let (neg, pos) = self.split(&zero).unwrap();
+            pos.remainder_pos(&abs_other)
+                .union(&neg.neg().remainder_pos(&abs_other).neg())
+                .with_error(error)
         }
     }
 
@@ -1069,7 +1050,12 @@ impl Interval {
     }
 
     pub fn cmp(&self, other: &Interval) -> (bool, bool, bool, bool) {
-        (self.lo < other.hi, self.hi < other.lo, self.hi > other.lo, self.lo > other.hi)
+        (
+            self.lo < other.hi,
+            self.hi < other.lo,
+            self.hi > other.lo,
+            self.lo > other.hi,
+        )
     }
 
     pub fn less_than(&self, other: &Interval) -> BooleanInterval {
@@ -1147,43 +1133,44 @@ impl Interval {
         let can_neg = other.lo < 0.0 as f64;
         let can_pos = other.hi >= 0.0 as f64;
         match (can_neg, can_pos) {
-            (true, true) => {
-                Interval {
-                    lo: -abs.hi.clone(),
-                    hi: abs.hi,
-                    err: self.err.union(&other.err),
-                }
-            }
-            (true, false) => {
-                Interval {
-                    lo: -abs.hi,
-                    hi: -abs.lo,
-                    err: self.err.union(&other.err),
-                }
-            }
-            (false, true) => {
-                Interval {
-                    lo: abs.lo,
-                    hi: abs.hi,
-                    err: self.err.union(&other.err),
-                }
-            }
+            (true, true) => Interval {
+                lo: -abs.hi.clone(),
+                hi: abs.hi,
+                err: self.err.union(&other.err),
+            },
+            (true, false) => Interval {
+                lo: -abs.hi,
+                hi: -abs.lo,
+                err: self.err.union(&other.err),
+            },
+            (false, true) => Interval {
+                lo: abs.lo,
+                hi: abs.hi,
+                err: self.err.union(&other.err),
+            },
             (false, false) => panic!("Should not be possible to have neither sign"),
         }
     }
 
     pub fn fdim(&self, other: &Interval) -> Interval {
-        self.sub(&other).fmax(&Interval::new(other.lo.prec(), 0.0, 0.0))
+        self.sub(&other)
+            .fmax(&Interval::new(other.lo.prec(), 0.0, 0.0))
     }
 
     pub fn sort(intervals: Vec<Interval>) -> Vec<Interval> {
         let error = ErrorInterval {
             lo: intervals.iter().any(|ival| ival.err.lo),
-            hi: intervals.iter().any(|ival| ival.err.hi)
+            hi: intervals.iter().any(|ival| ival.err.hi),
         };
-        let mut upper = intervals.iter().map(|ival| ival.hi.clone()).collect::<Vec<Float>>();
+        let mut upper = intervals
+            .iter()
+            .map(|ival| ival.hi.clone())
+            .collect::<Vec<Float>>();
         upper.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        let mut lower = intervals.iter().map(|ival| ival.lo.clone()).collect::<Vec<Float>>();
+        let mut lower = intervals
+            .iter()
+            .map(|ival| ival.lo.clone())
+            .collect::<Vec<Float>>();
         lower.sort_by(|a, b| a.partial_cmp(b).unwrap());
         let mut res = vec![];
         for (hi, lo) in upper.into_iter().zip(lower.into_iter()) {
@@ -1200,9 +1187,9 @@ impl Interval {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use egg::Symbol;
     use rand;
     use rand::Rng;
-    use std::ops::Add;
     use rug::ops::Pow;
 
     fn random_interval() -> Interval {
@@ -1219,9 +1206,9 @@ mod tests {
         type FOperator = fn(Float, &Float) -> Float;
         type SingleFOperator = fn(Float) -> Float;
         type FloatToBool = fn(&Interval, &Interval) -> BooleanInterval;
-        type SingleFloatToBool = fn(&Interval) -> BooleanInterval;
+        //type SingleFloatToBool = fn(&Interval) -> BooleanInterval;
         type FFloatToBool = fn(Float, &Float) -> bool;
-        type SingleFFloatToBool = fn(Float) -> bool;
+        //type SingleFFloatToBool = fn(Float) -> bool;
 
         let interval_functions: Vec<(Symbol, Operator, FOperator)> = vec![
             ("add".into(), Interval::add, |x, y| x + y),
@@ -1232,24 +1219,30 @@ mod tests {
             ("pow".into(), Interval::pow, |x, y| x.pow(y)),
             ("atan2".into(), Interval::atan2, Float::atan2),
             ("fmod".into(), Interval::fmod, |x, y| x % y),
-            ("remainder".into(), Interval::remainder, |x, y| x.remainder(y)),
+            ("remainder".into(), Interval::remainder, |x, y| {
+                x.remainder(y)
+            }),
             ("fmin".into(), Interval::fmin, |x, y| x.min(y)),
             ("fmax".into(), Interval::fmax, |x, y| x.max(y)),
             ("copysign".into(), Interval::copysign, |x, y| x.copysign(y)),
         ];
         let to_boolean_functions: Vec<(Symbol, FloatToBool, FFloatToBool)> = vec![
             ("less_than".into(), Interval::less_than, |x, y| &x < y),
-            ("less_than_or_equal".into(), Interval::less_than_or_equal, |x, y| &x <= y),
+            (
+                "less_than_or_equal".into(),
+                Interval::less_than_or_equal,
+                |x, y| &x <= y,
+            ),
             ("greater_than".into(), Interval::greater_than, |x, y| &x > y),
-            ("greater_than_or_equal".into(), Interval::greater_than_or_equal, |x, y| &x >= y),
+            (
+                "greater_than_or_equal".into(),
+                Interval::greater_than_or_equal,
+                |x, y| &x >= y,
+            ),
             ("equal_to".into(), Interval::equal_to, |x, y| &x == y),
         ];
         let single_operand_functions: Vec<(Symbol, SingleOperator, SingleFOperator)> = vec![
-            (
-                "round".into(),
-                Interval::round,
-                |x| x.round(),
-            ),
+            ("round".into(), Interval::round, |x| x.round()),
             ("ceil".into(), Interval::ceil, Float::ceil),
             ("floor".into(), Interval::floor, Float::floor),
             ("trunc".into(), Interval::trunc, Float::trunc),
@@ -1291,7 +1284,11 @@ mod tests {
                 let finalreal = realfun(bf(F64_PREC, realval1), &bf(F64_PREC, realval2));
 
                 if finalreal {
-                    assert!(finalival.hi, "Should have a possibility of true value for {}({:?} {:?})", name, ival1, ival2);
+                    assert!(
+                        finalival.hi,
+                        "Should have a possibility of true value for {}({:?} {:?})",
+                        name, ival1, ival2
+                    );
                 } else {
                     assert!(!finalival.lo);
                 }

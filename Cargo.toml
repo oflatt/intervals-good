@@ -1,7 +1,14 @@
 [package]
 name = "intervals-good"
 version = "0.1.0"
-edition = "2021"
+edition = "2018"
+readme = "README.md"
+license = "MIT"
+keywords = ["interval", "arithmetic", "math"]
+categories = ["mathematics"]
+repository = "https://github.com/oflatt/intervals-good"
+authors = ["Oliver Flatt <oflatt@gmail.com>"]
+description = "An interval arithmetic library with support for many functions and which tracks when domain errors may occur or are guaranteed to occur."
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
