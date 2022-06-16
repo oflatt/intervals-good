@@ -1,4 +1,5 @@
 use core::cmp::Ordering;
+use core::cmp::Ord;
 use egg::Symbol;
 use rug::{
     float::Constant, float::Round, float::Special, ops::AssignRound, ops::DivAssignRound,
@@ -1140,6 +1141,60 @@ impl Interval {
             err: self.err.union(&other.err),
         }
     }
+
+    pub fn copysign(&self, other: &Interval) -> Interval {
+        let abs = self.fabs();
+        let can_neg = other.lo < 0.0 as f64;
+        let can_pos = other.hi >= 0.0 as f64;
+        match (can_neg, can_pos) {
+            (true, true) => {
+                Interval {
+                    lo: -abs.hi.clone(),
+                    hi: abs.hi,
+                    err: self.err.union(&other.err),
+                }
+            }
+            (true, false) => {
+                Interval {
+                    lo: -abs.hi,
+                    hi: -abs.lo,
+                    err: self.err.union(&other.err),
+                }
+            }
+            (false, true) => {
+                Interval {
+                    lo: abs.lo,
+                    hi: abs.hi,
+                    err: self.err.union(&other.err),
+                }
+            }
+            (false, false) => panic!("Should not be possible to have neither sign"),
+        }
+    }
+
+    pub fn fdim(&self, other: &Interval) -> Interval {
+        self.sub(&other).fmax(&Interval::new(other.lo.prec(), 0.0, 0.0))
+    }
+
+    pub fn sort(intervals: Vec<Interval>) -> Vec<Interval> {
+        let error = ErrorInterval {
+            lo: intervals.iter().any(|ival| ival.err.lo),
+            hi: intervals.iter().any(|ival| ival.err.hi)
+        };
+        let mut upper = intervals.iter().map(|ival| ival.hi.clone()).collect::<Vec<Float>>();
+        upper.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let mut lower = intervals.iter().map(|ival| ival.lo.clone()).collect::<Vec<Float>>();
+        lower.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let mut res = vec![];
+        for (hi, lo) in upper.into_iter().zip(lower.into_iter()) {
+            res.push(Interval {
+                lo,
+                hi,
+                err: error.clone(),
+            });
+        }
+        res
+    }
 }
 
 #[cfg(test)]
@@ -1180,6 +1235,7 @@ mod tests {
             ("remainder".into(), Interval::remainder, |x, y| x.remainder(y)),
             ("fmin".into(), Interval::fmin, |x, y| x.min(y)),
             ("fmax".into(), Interval::fmax, |x, y| x.max(y)),
+            ("copysign".into(), Interval::copysign, |x, y| x.copysign(y)),
         ];
         let to_boolean_functions: Vec<(Symbol, FloatToBool, FFloatToBool)> = vec![
             ("less_than".into(), Interval::less_than, |x, y| &x < y),
