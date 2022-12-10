@@ -1,6 +1,6 @@
 use rug::{
-    float::Constant, float::Round, ops::AssignRound, ops::DivAssignRound, ops::PowAssignRound,
-    float::OrdFloat, Float
+    float::Constant, float::OrdFloat, float::Round, float::Special, ops::AssignRound,
+    ops::DivAssignRound, ops::PowAssignRound, Float,
 };
 
 const F64_PREC: u32 = 53;
@@ -13,7 +13,7 @@ enum IntervalClassification {
 
 /// The `lo` field represents whether the computation must error.
 /// The `hi` field represents whether the computation may error.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub struct ErrorInterval {
     pub lo: bool,
     // the
@@ -37,6 +37,30 @@ pub struct BooleanInterval {
 }
 
 impl BooleanInterval {
+    pub fn true_interval() -> BooleanInterval {
+        BooleanInterval {
+            lo: true,
+            hi: true,
+            err: ErrorInterval::default(),
+        }
+    }
+
+    pub fn false_interval() -> BooleanInterval {
+        BooleanInterval {
+            lo: false,
+            hi: false,
+            err: ErrorInterval::default(),
+        }
+    }
+
+    pub fn unknown_interval() -> BooleanInterval {
+        BooleanInterval {
+            lo: false,
+            hi: true,
+            err: ErrorInterval::default(),
+        }
+    }
+    
     pub fn and(&self, other: &BooleanInterval) -> BooleanInterval {
         BooleanInterval {
             lo: self.lo && other.lo,
@@ -196,11 +220,39 @@ impl Interval {
     }
 
     pub fn union(&self, other: &Interval) -> Interval {
-        Interval::make(self.lo().min(&other.lo()), self.hi().max(&other.hi()), self.err.union(&other.err))
+        Interval::make(
+            self.lo().min(&other.lo()),
+            self.hi().max(&other.hi()),
+            self.err.union(&other.err),
+        )
     }
 
     pub fn neg(&self) -> Interval {
         Interval::make(-self.hi(), -self.lo(), self.err.clone())
+    }
+
+    pub fn pi(prec: u32) -> Interval {
+        let mut lopi = Float::new(prec);
+        lopi.assign_round(Constant::Pi, Round::Down);
+        let mut hipi = Float::new(prec);
+        hipi.assign_round(Constant::Pi, Round::Up);
+        Interval::make(lopi, hipi, ErrorInterval::default())
+    }
+
+    pub fn e(prec: u32) -> Interval {
+        let mut loe = Float::with_val(prec, 1.0);
+        loe.exp_round(Round::Down);
+        let mut hie = Float::with_val(prec, 1.0);
+        hie.exp_round(Round::Up);
+        Interval::make(loe, hie, ErrorInterval::default())
+    }
+
+    pub fn inf(prec: u32) -> Interval {
+        Interval::make(
+            Float::with_val(prec, Special::Infinity),
+            Float::with_val(prec, Special::Infinity),
+            ErrorInterval::default(),
+        )
     }
 
     pub fn add(&self, other: &Interval) -> Interval {
@@ -230,24 +282,33 @@ impl Interval {
 
         use IntervalClassification::*;
         match (self.classify(), other.classify()) {
-            (StrictlyPos, StrictlyPos) => perform_mult(&self.lo(), &other.lo(), &self.hi(), &other.hi()),
+            (StrictlyPos, StrictlyPos) => {
+                perform_mult(&self.lo(), &other.lo(), &self.hi(), &other.hi())
+            }
 
-            (StrictlyPos, StrictlyNeg) => perform_mult(&self.hi(), &other.lo(), &self.lo(), &other.hi()),
+            (StrictlyPos, StrictlyNeg) => {
+                perform_mult(&self.hi(), &other.lo(), &self.lo(), &other.hi())
+            }
 
             (StrictlyPos, Mixed) => perform_mult(&self.hi(), &other.lo(), &self.hi(), &other.hi()),
 
             (StrictlyNeg, Mixed) => perform_mult(&self.lo(), &other.hi(), &self.lo(), &other.lo()),
 
-            (StrictlyNeg, StrictlyPos) => perform_mult(&self.lo(), &other.hi(), &self.hi(), &other.lo()),
+            (StrictlyNeg, StrictlyPos) => {
+                perform_mult(&self.lo(), &other.hi(), &self.hi(), &other.lo())
+            }
 
-            (StrictlyNeg, StrictlyNeg) => perform_mult(&self.hi(), &other.hi(), &self.lo(), &other.lo()),
+            (StrictlyNeg, StrictlyNeg) => {
+                perform_mult(&self.hi(), &other.hi(), &self.lo(), &other.lo())
+            }
 
             (Mixed, StrictlyPos) => perform_mult(&self.lo(), &other.hi(), &self.hi(), &other.hi()),
 
             (Mixed, StrictlyNeg) => perform_mult(&self.hi(), &other.lo(), &self.lo(), &other.lo()),
 
-            (Mixed, Mixed) => perform_mult(&self.hi(), &other.lo(), &self.lo(), &other.lo())
-                .union(&perform_mult(&self.lo(), &other.hi(), &self.hi(), &other.hi())),
+            (Mixed, Mixed) => perform_mult(&self.hi(), &other.lo(), &self.lo(), &other.lo()).union(
+                &perform_mult(&self.lo(), &other.hi(), &self.hi(), &other.hi()),
+            ),
         }
     }
 
@@ -277,12 +338,23 @@ impl Interval {
 
         use IntervalClassification::*;
         match (self.classify(), other.classify()) {
-            (_any, Mixed) => 
-            Interval::make(bf(self.lo().prec(), std::f64::NEG_INFINITY), bf(self.lo().prec(), std::f64::INFINITY), error),
-            (StrictlyPos, StrictlyPos) => perform_div(&self.lo(), &other.hi(), &self.hi(), &other.lo()),
-            (StrictlyPos, StrictlyNeg) => perform_div(&self.hi(), &other.hi(), &self.lo(), &other.lo()),
-            (StrictlyNeg, StrictlyPos) => perform_div(&self.lo(), &other.lo(), &self.hi(), &other.hi()),
-            (StrictlyNeg, StrictlyNeg) => perform_div(&self.hi(), &other.lo(), &self.lo(), &other.hi()),
+            (_any, Mixed) => Interval::make(
+                bf(self.lo().prec(), std::f64::NEG_INFINITY),
+                bf(self.lo().prec(), std::f64::INFINITY),
+                error,
+            ),
+            (StrictlyPos, StrictlyPos) => {
+                perform_div(&self.lo(), &other.hi(), &self.hi(), &other.lo())
+            }
+            (StrictlyPos, StrictlyNeg) => {
+                perform_div(&self.hi(), &other.hi(), &self.lo(), &other.lo())
+            }
+            (StrictlyNeg, StrictlyPos) => {
+                perform_div(&self.lo(), &other.lo(), &self.hi(), &other.hi())
+            }
+            (StrictlyNeg, StrictlyNeg) => {
+                perform_div(&self.hi(), &other.lo(), &self.lo(), &other.hi())
+            }
             (Mixed, StrictlyPos) => perform_div(&self.lo(), &other.lo(), &self.hi(), &other.lo()),
             (Mixed, StrictlyNeg) => perform_div(&self.hi(), &other.hi(), &self.lo(), &other.hi()),
         }
@@ -317,10 +389,14 @@ impl Interval {
     }
 
     fn clamp(&self, lo: &Float, hi: &Float) -> Interval {
-        Interval::make(self.lo().max(lo).min(hi), self.hi().min(hi).max(lo), ErrorInterval {
-            lo: self.err.lo || &self.hi() < lo || &self.lo() > hi,
-            hi: self.err.hi || &self.lo() < lo || &self.hi() > hi,
-        })
+        Interval::make(
+            self.lo().max(lo).min(hi),
+            self.hi().min(hi).max(lo),
+            ErrorInterval {
+                lo: self.err.lo || &self.hi() < lo || &self.lo() > hi,
+                hi: self.err.hi || &self.lo() < lo || &self.hi() > hi,
+            },
+        )
     }
 
     pub fn round(&self) -> Interval {
@@ -363,18 +439,27 @@ impl Interval {
     }
 
     pub fn ln(&self) -> Interval {
-        self.clamp(&bf(self.lo().prec(), 0.0), &bf(self.lo().prec(), f64::INFINITY))
-            .monotonic_mut(Float::ln_round)
+        self.clamp(
+            &bf(self.lo().prec(), 0.0),
+            &bf(self.lo().prec(), f64::INFINITY),
+        )
+        .monotonic_mut(Float::ln_round)
     }
 
     pub fn log10(&self) -> Interval {
-        self.clamp(&bf(self.lo().prec(), 0.0), &bf(self.lo().prec(), f64::INFINITY))
-            .monotonic_mut(Float::log10_round)
+        self.clamp(
+            &bf(self.lo().prec(), 0.0),
+            &bf(self.lo().prec(), f64::INFINITY),
+        )
+        .monotonic_mut(Float::log10_round)
     }
 
     pub fn log2(&self) -> Interval {
-        self.clamp(&bf(self.lo().prec(), 0.0), &bf(self.lo().prec(), f64::INFINITY))
-            .monotonic_mut(Float::log2_round)
+        self.clamp(
+            &bf(self.lo().prec(), 0.0),
+            &bf(self.lo().prec(), f64::INFINITY),
+        )
+        .monotonic_mut(Float::log2_round)
     }
 
     pub fn ln_1p(&self) -> Interval {
@@ -386,8 +471,11 @@ impl Interval {
     }
 
     pub fn sqrt(&self) -> Interval {
-        self.clamp(&bf(self.lo().prec(), 0.0), &bf(self.lo().prec(), f64::INFINITY))
-            .monotonic_mut(Float::sqrt_round)
+        self.clamp(
+            &bf(self.lo().prec(), 0.0),
+            &bf(self.lo().prec(), f64::INFINITY),
+        )
+        .monotonic_mut(Float::sqrt_round)
     }
 
     pub fn cbrt(&self) -> Interval {
@@ -420,24 +508,33 @@ impl Interval {
             self.classify_with(&bf(other.lo().prec(), 1.0)),
             other.classify(),
         ) {
-            (StrictlyPos, StrictlyPos) => perform_pow(&self.lo(), &other.lo(), &self.hi(), &other.hi()),
+            (StrictlyPos, StrictlyPos) => {
+                perform_pow(&self.lo(), &other.lo(), &self.hi(), &other.hi())
+            }
 
-            (StrictlyPos, StrictlyNeg) => perform_pow(&self.hi(), &other.lo(), &self.lo(), &other.hi()),
+            (StrictlyPos, StrictlyNeg) => {
+                perform_pow(&self.hi(), &other.lo(), &self.lo(), &other.hi())
+            }
 
             (StrictlyPos, Mixed) => perform_pow(&self.hi(), &other.lo(), &self.hi(), &other.hi()),
 
             (StrictlyNeg, Mixed) => perform_pow(&self.lo(), &other.hi(), &self.lo(), &other.lo()),
 
-            (StrictlyNeg, StrictlyPos) => perform_pow(&self.lo(), &other.hi(), &self.hi(), &other.lo()),
+            (StrictlyNeg, StrictlyPos) => {
+                perform_pow(&self.lo(), &other.hi(), &self.hi(), &other.lo())
+            }
 
-            (StrictlyNeg, StrictlyNeg) => perform_pow(&self.hi(), &other.hi(), &self.lo(), &other.lo()),
+            (StrictlyNeg, StrictlyNeg) => {
+                perform_pow(&self.hi(), &other.hi(), &self.lo(), &other.lo())
+            }
 
             (Mixed, StrictlyPos) => perform_pow(&self.lo(), &other.hi(), &self.hi(), &other.hi()),
 
             (Mixed, StrictlyNeg) => perform_pow(&self.hi(), &other.lo(), &self.lo(), &other.lo()),
 
-            (Mixed, Mixed) => perform_pow(&self.hi(), &other.lo(), &self.lo(), &other.lo())
-                .union(&perform_pow(&self.lo(), &other.hi(), &self.hi(), &other.hi())),
+            (Mixed, Mixed) => perform_pow(&self.hi(), &other.lo(), &self.lo(), &other.lo()).union(
+                &perform_pow(&self.lo(), &other.hi(), &self.hi(), &other.hi()),
+            ),
         }
     }
 
@@ -453,16 +550,25 @@ impl Interval {
         };
         if pow_floor < pow_ceil {
             if self.hi() == zero {
-                Interval::make(zero.clone(), zero,
-                          ErrorInterval {
-                            lo: self.err.lo,
-                            hi: true
-                          })
+                Interval::make(
+                    zero.clone(),
+                    zero,
+                    ErrorInterval {
+                        lo: self.err.lo,
+                        hi: true,
+                    },
+                )
             } else {
-                Interval::make(bf(self.lo().prec(), f64::NAN), bf(self.lo().prec(), f64::NAN), ErrorInterval { lo: true, hi: true })
+                Interval::make(
+                    bf(self.lo().prec(), f64::NAN),
+                    bf(self.lo().prec(), f64::NAN),
+                    ErrorInterval { lo: true, hi: true },
+                )
             }
         } else if pow_ceil == pow_floor {
-            let pos = self.fabs().pow_pos(&Interval::make(pow_ceil.clone(), pow_ceil.clone(), error));
+            let pos =
+                self.fabs()
+                    .pow_pos(&Interval::make(pow_ceil.clone(), pow_ceil.clone(), error));
             if pow_ceil.to_integer().unwrap().is_odd() {
                 pos.neg()
             } else {
@@ -508,16 +614,8 @@ impl Interval {
     pub fn split(&self, along: &Float) -> Option<(Interval, Interval)> {
         if self.contains(along) {
             Some((
-                Interval::make(
-                    self.lo(),
-                    along.clone(),
-                    self.err.clone(),
-                ),
-                Interval::make (
-                    along.clone(),
-                    self.hi(),
-                    self.err.clone(),
-                ),
+                Interval::make(self.lo(), along.clone(), self.err.clone()),
+                Interval::make(along.clone(), self.hi(), self.err.clone()),
             ))
         } else {
             None
@@ -594,28 +692,22 @@ impl Interval {
             let mut lotmp = self.lo();
             hitmp.cos_round(Round::Down);
             lotmp.cos_round(Round::Up);
-            Interval::make(
-                hitmp,
-                lotmp,
-                 self.err.clone())
+            Interval::make(hitmp, lotmp, self.err.clone())
         } else if afactor == bfactor && is_odd(&afactor) {
             let mut hitmp = self.hi();
             let mut lotmp = self.lo();
             hitmp.cos_round(Round::Up);
             lotmp.cos_round(Round::Down);
-            Interval::make(
-                lotmp,
-                hitmp,
-                 self.err.clone())
+            Interval::make(lotmp, hitmp, self.err.clone())
         } else if (bfactor.clone() - afactor.clone()) == (1.0) && is_even(&afactor) {
             let mut lotmp = self.lo();
             lotmp.cos_round(Round::Up);
             let mut hitmp = self.hi();
             hitmp.cos_round(Round::Up);
-            Interval::make (
+            Interval::make(
                 bf(self.lo().prec(), -1.0),
                 lotmp.max(&hitmp),
-                self.err.clone()
+                self.err.clone(),
             )
         } else if (bfactor.clone() - afactor.clone()) == (1.0) && is_odd(&afactor) {
             let mut lotmp = self.lo();
@@ -625,12 +717,14 @@ impl Interval {
             Interval::make(
                 lotmp.min(&hitmp),
                 bf(self.lo().prec(), 1.0),
-                 self.err.clone())
+                self.err.clone(),
+            )
         } else {
             return Interval::make(
                 bf(self.lo().prec(), -1.0),
                 bf(self.lo().prec(), 1.0),
-                 self.err.clone());
+                self.err.clone(),
+            );
         }
     }
 
@@ -648,19 +742,13 @@ impl Interval {
             let mut lotmp = self.lo();
             hitmp.sin_round(Round::Down);
             lotmp.sin_round(Round::Up);
-            Interval::make(
-                hitmp,
-                lotmp,
-                 self.err.clone())
+            Interval::make(hitmp, lotmp, self.err.clone())
         } else if afactor == bfactor && is_odd(&afactor) {
             let mut hitmp = self.hi();
             let mut lotmp = self.lo();
             hitmp.sin_round(Round::Up);
             lotmp.sin_round(Round::Down);
-            Interval::make(
-                lotmp,
-                hitmp,
-                 self.err.clone())
+            Interval::make(lotmp, hitmp, self.err.clone())
         } else if (bfactor.clone() - afactor.clone()) == (1.0) && is_even(&afactor) {
             let mut lotmp = self.lo();
             lotmp.sin_round(Round::Up);
@@ -669,7 +757,8 @@ impl Interval {
             Interval::make(
                 bf(self.lo().prec(), -1.0),
                 lotmp.max(&hitmp),
-                 self.err.clone())
+                self.err.clone(),
+            )
         } else if (bfactor.clone() - afactor.clone()) == (1.0) && is_odd(&afactor) {
             let mut lotmp = self.lo();
             lotmp.sin_round(Round::Down);
@@ -678,12 +767,14 @@ impl Interval {
             Interval::make(
                 lotmp.min(&hitmp),
                 bf(self.lo().prec(), 1.0),
-                 self.err.clone())
+                self.err.clone(),
+            )
         } else {
             return Interval::make(
                 bf(self.lo().prec(), -1.0),
                 bf(self.lo().prec(), 1.0),
-                 self.err.clone());
+                self.err.clone(),
+            );
         }
     }
 
@@ -701,15 +792,13 @@ impl Interval {
             let mut lotmp = self.lo();
             lotmp.tan_round(Round::Down);
             hitmp.tan_round(Round::Up);
-            Interval::make(
-                lotmp,
-                hitmp,
-                 self.err.clone())
+            Interval::make(lotmp, hitmp, self.err.clone())
         } else {
             return Interval::make(
                 bf(self.lo().prec(), f64::NEG_INFINITY),
                 bf(self.lo().prec(), f64::INFINITY),
-                 self.err.clone());
+                self.err.clone(),
+            );
         }
     }
 
@@ -719,10 +808,7 @@ impl Interval {
             let mut hitmp = hi1.clone();
             lotmp.atan2_round(lo2, Round::Down);
             hitmp.atan2_round(hi2, Round::Up);
-            Interval::make(
-                lotmp,
-                hitmp,
-                 self.err.clone())
+            Interval::make(lotmp, hitmp, self.err.clone())
         };
 
         use IntervalClassification::*;
@@ -746,9 +832,12 @@ impl Interval {
                         lo: self.err.lo
                             || other.err.lo
                             || other.err.lo
-                            || (self.lo() == 0 && self.hi() == 0 && other.lo() == 0 && other.hi() == 0),
+                            || (self.lo() == 0
+                                && self.hi() == 0
+                                && other.lo() == 0
+                                && other.hi() == 0),
                         hi: self.err.lo || self.hi() >= zero,
-                    }
+                    },
                 )
             }
         }
@@ -771,8 +860,11 @@ impl Interval {
     }
 
     pub fn acosh(&self) -> Interval {
-        self.clamp(&bf(self.lo().prec(), 1.0), &bf(self.lo().prec(), f64::INFINITY))
-            .monotonic_mut(Float::acosh_round)
+        self.clamp(
+            &bf(self.lo().prec(), 1.0),
+            &bf(self.lo().prec(), f64::INFINITY),
+        )
+        .monotonic_mut(Float::acosh_round)
     }
 
     pub fn atanh(&self) -> Interval {
@@ -815,10 +907,7 @@ impl Interval {
                 tmphi.mul_sub_round(&other.lo(), &self.hi(), Round::Down);
                 tmphi = -tmphi;
 
-                Interval::make(
-                    tmplo,
-                    tmphi,
-                     self.err.clone())
+                Interval::make(tmplo, tmphi, self.err.clone())
             } else {
                 let mut cplusone = c.clone();
                 cplusone.mul_add_round(
@@ -828,25 +917,15 @@ impl Interval {
                 );
                 let mut tmphi = self.hi();
                 tmphi.div_assign_round(cplusone, Round::Up);
-                Interval::make(
-                    bf(self.lo().prec(), 0.0),
-                    tmphi,
-                     self.err.clone())
+                Interval::make(bf(self.lo().prec(), 0.0), tmphi, self.err.clone())
             }
         } else {
-            return Interval::make(
-                bf(self.lo().prec(), 0 as f64),
-                other.hi(),
-                 self.err.clone());
+            return Interval::make(bf(self.lo().prec(), 0 as f64), other.hi(), self.err.clone());
         }
     }
 
     fn with_error(&self, err: ErrorInterval) -> Interval {
-        Interval::make(
-            self.lo(),
-            self.hi(),
-            err,
-        )
+        Interval::make(self.lo(), self.hi(), err)
     }
 
     pub fn fmod(&self, other: &Interval) -> Interval {
@@ -898,10 +977,7 @@ impl Interval {
                 // DIFFERENCE FROM fmod_pos
                 tmphi = tmphi.min(&halfway);
 
-                Interval::make(
-                    tmplo,
-                    tmphi,
-                     self.err.clone())
+                Interval::make(tmplo, tmphi, self.err.clone())
             } else {
                 // DIFFERENCE FROM fmod_pos
                 // NOPE! need to subtract half.bf one way, add it another!
@@ -925,10 +1001,7 @@ impl Interval {
                     Round::Down,
                 ));
 
-                Interval::make(
-                    y_lo.min(&-y_hi.clone()),
-                    y_hi,
-                     self.err.clone())
+                Interval::make(y_lo.min(&-y_hi.clone()), y_hi, self.err.clone())
             }
         } else {
             let y = div_round(&other.hi(), &bf(self.lo().prec(), 2.0), Round::Up);
@@ -936,7 +1009,8 @@ impl Interval {
                 // DIFFERENCE FROM fmod_pos
                 -y.clone(),
                 y,
-                 self.err.clone())
+                self.err.clone(),
+            )
         }
     }
 
@@ -1036,14 +1110,16 @@ impl Interval {
         Interval::make(
             self.lo().min(&other.lo()),
             self.hi().min(&other.hi()),
-             self.err.union(&other.err))
+            self.err.union(&other.err),
+        )
     }
 
     pub fn fmax(&self, other: &Interval) -> Interval {
         Interval::make(
             self.lo().max(&other.lo()),
             self.hi().max(&other.hi()),
-             self.err.union(&other.err))
+            self.err.union(&other.err),
+        )
     }
 
     pub fn copysign(&self, other: &Interval) -> Interval {
@@ -1051,18 +1127,9 @@ impl Interval {
         let can_neg = other.lo() < 0.0 as f64;
         let can_pos = other.hi() >= 0.0 as f64;
         match (can_neg, can_pos) {
-            (true, true) => Interval::make(
-                -abs.hi(),
-                abs.hi(),
-                 self.err.union(&other.err)),
-            (true, false) => Interval::make(
-                -abs.hi(),
-                -abs.lo(),
-                 self.err.union(&other.err)),
-            (false, true) => Interval::make(
-                abs.lo(),
-                abs.hi(),
-                 self.err.union(&other.err)),
+            (true, true) => Interval::make(-abs.hi(), abs.hi(), self.err.union(&other.err)),
+            (true, false) => Interval::make(-abs.hi(), -abs.lo(), self.err.union(&other.err)),
+            (false, true) => Interval::make(abs.lo(), abs.hi(), self.err.union(&other.err)),
             (false, false) => panic!("Should not be possible to have neither sign"),
         }
     }
@@ -1089,10 +1156,7 @@ impl Interval {
         lower.sort_by(|a, b| a.partial_cmp(b).unwrap());
         let mut res = vec![];
         for (hi, lo) in upper.into_iter().zip(lower.into_iter()) {
-            res.push(Interval::make(
-                lo,
-                hi,
-                 error.clone()));
+            res.push(Interval::make(lo, hi, error.clone()));
         }
         res
     }
