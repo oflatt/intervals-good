@@ -621,12 +621,22 @@ impl Interval {
 
     pub fn pow(&self, other: &Interval) -> Interval {
         if self.hi() < bf(self.lo().prec(), 0.0) {
-            self.pow_neg(&other)
+            self.pow_neg(other)
         } else if self.lo() >= bf(self.lo().prec(), 0.0) {
-            self.pow_pos(&other)
+            self.pow_pos(other)
+        } else if let Some((neg, pos)) = self.split(&bf(self.lo().prec(), 0.0)) {
+            neg.pow_neg(other).union(&pos.pow_pos(other))
+        } else if self.lo().is_sign_positive() {
+            self.pow_pos(other)
+        } else if self.hi().is_sign_positive() {
+            self.pow_neg(other)
         } else {
-            let (neg, pos) = self.split(&bf(self.lo().prec(), 0.0)).unwrap();
-            neg.pow_neg(other).union(&pos.pow_pos(&other))
+            assert!(self.err.hi);
+            Interval::make(
+                bf(self.lo().prec(), f64::NAN),
+                bf(self.lo().prec(), f64::NAN),
+                ErrorInterval { lo: true, hi: true },
+            )
         }
     }
 
