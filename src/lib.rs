@@ -365,11 +365,8 @@ impl Interval {
         let mut tmphi = self.hi();
         fun(&mut tmplo, Round::Down);
         fun(&mut tmphi, Round::Up);
-        if tmplo.is_nan() {
-            panic!("monotonic_mut: lo is NaN");
-        }
-        if tmphi.is_nan() {
-            panic!("monotonic_mut: hi is NaN");
+        if tmplo.is_nan() || tmphi.is_nan() {
+            assert!(self.err.lo);
         }
         Interval::make(tmplo, tmphi, self.err.clone())
     }
