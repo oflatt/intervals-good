@@ -553,7 +553,6 @@ impl Interval {
 
     // assumes x is negative or zero
     fn pow_neg(&self, other: &Interval) -> Interval {
-        println!("pow_neg: {:?} ^ {:?}", self, other);
         let a_ceil = other.lo().ceil();
         let b_floor = other.hi().floor();
         let zero: Float = bf(self.lo().prec(), 0.0);
@@ -583,7 +582,6 @@ impl Interval {
             }
         // around one integer
         } else if a_ceil == b_floor {
-            println!("xpos is {:?}", xpos);
             let pos = xpos.pow_pos(&Interval::make(a_ceil.clone(), a_ceil.clone(), error));
             if a_ceil.to_integer().unwrap().is_odd() {
                 pos.neg()
@@ -1194,6 +1192,7 @@ mod tests {
 
     fn random_interval() -> Interval {
         let mut rng = rand::thread_rng();
+        let sample_max = 10000000.0;
 
         // half the time generate constants
         if rng.gen_bool(0.5) {
@@ -1202,13 +1201,13 @@ mod tests {
                 let val: f64 = constants[rng.gen_range(0..constants.len())];
                 return Interval::new(F64_PREC, val, val);
             } else {
-                let val: f64 = rng.gen_range(-40.0..=40.0);
+                let val: f64 = rng.gen_range(-sample_max..=sample_max);
                 return Interval::new(F64_PREC, val, val);
             }
         }
 
-        let lo: f64 = rng.gen_range(-40.0..=0.0);
-        let hi = rng.gen_range(lo..=41.0);
+        let lo: f64 = rng.gen_range(-sample_max..=sample_max);
+        let hi = rng.gen_range(sample_max..=sample_max);
         Interval::new(F64_PREC, lo, hi)
     }
 
