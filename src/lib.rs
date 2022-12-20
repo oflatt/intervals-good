@@ -3,6 +3,9 @@ use rug::{
     ops::DivAssignRound, ops::PowAssignRound, Float,
 };
 
+use float_next_after::NextAfter;
+
+
 const F64_PREC: u32 = 53;
 
 enum IntervalClassification {
@@ -27,6 +30,10 @@ impl ErrorInterval {
             hi: self.hi || other.hi,
         }
     }
+
+    pub fn is_valid(&self) -> bool {
+        !self.lo || self.hi
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -43,6 +50,10 @@ impl BooleanInterval {
             hi: true,
             err: ErrorInterval::default(),
         }
+    }
+
+    pub fn is_valid(&self) -> bool {
+        (!self.lo) || self.hi && self.err.is_valid()
     }
 
     pub fn false_interval() -> BooleanInterval {
@@ -178,6 +189,11 @@ pub(crate) fn mul_round(a: &Float, b: &Float, round: Round) -> Float {
 }
 
 impl Interval {
+    pub fn is_valid(&self) -> bool {
+        // ordered and signes ordered, and not just infinite values
+        self.lo <= self.hi && self.err.is_valid() && !(self.hi().is_infinite() && self.hi == self.lo && !self.err.lo)
+    }
+    
     fn lo(&self) -> Float {
         self.lo.clone().into()
     }
@@ -404,6 +420,17 @@ impl Interval {
         )
     }
 
+    fn clamp_strict(&self, lo: &Float, hi: &Float) -> Interval {
+        Interval::make(
+            self.lo().max(lo).min(hi),
+            self.hi().min(hi).max(lo),
+            ErrorInterval {
+                lo: self.err.lo || &self.hi() <= lo || &self.lo() >= hi,
+                hi: self.err.hi || &self.lo() <= lo || &self.hi() >= hi,
+            },
+        )
+    }
+
     pub fn round(&self) -> Interval {
         Interval::make(self.lo().floor(), self.hi().ceil(), self.err.clone())
     }
@@ -444,7 +471,7 @@ impl Interval {
     }
 
     pub fn ln(&self) -> Interval {
-        self.clamp(
+        self.clamp_strict(
             &bf(self.lo().prec(), 0.0),
             &bf(self.lo().prec(), f64::INFINITY),
         )
@@ -452,7 +479,7 @@ impl Interval {
     }
 
     pub fn log10(&self) -> Interval {
-        self.clamp(
+        self.clamp_strict(
             &bf(self.lo().prec(), 0.0),
             &bf(self.lo().prec(), f64::INFINITY),
         )
@@ -460,7 +487,7 @@ impl Interval {
     }
 
     pub fn log2(&self) -> Interval {
-        self.clamp(
+        self.clamp_strict(
             &bf(self.lo().prec(), 0.0),
             &bf(self.lo().prec(), f64::INFINITY),
         )
@@ -468,7 +495,7 @@ impl Interval {
     }
 
     pub fn ln_1p(&self) -> Interval {
-        self.clamp(
+        self.clamp_strict(
             &bf(self.lo().prec(), -1.0),
             &bf(self.lo().prec(), f64::INFINITY),
         )
@@ -886,7 +913,7 @@ impl Interval {
     }
 
     pub fn atanh(&self) -> Interval {
-        self.clamp(&bf(self.lo().prec(), -1.0), &bf(self.lo().prec(), 1.0))
+        self.clamp_strict(&bf(self.lo().prec(), -1.0), &bf(self.lo().prec(), 1.0))
             .monotonic_mut(Float::atanh_round)
     }
 
@@ -1190,25 +1217,48 @@ mod tests {
     use rand::Rng;
     use rug::ops::Pow;
 
+    fn assert_contains(ival: &Interval, val: rug::Float, name: &Symbol) {
+        assert!(
+            val <= ival.hi(),
+            "{}: {} <= {}",
+            name,
+            val,
+            ival.hi()
+        );
+
+        assert!(
+            val >= ival.lo(),
+            "{}: {} >= {}",
+            name,
+            val,
+            ival.lo()
+        );
+    }
+
     fn random_interval() -> Interval {
         let mut rng = rand::thread_rng();
-        let sample_max = 10000000.0;
+        let sample_max = 100000000000000000.0;
 
         // half the time generate constants
         if rng.gen_bool(0.5) {
             let constants = vec![0.0, -1.0, 1.0, 0.5];
             if rng.gen_bool(0.8) {
                 let val: f64 = constants[rng.gen_range(0..constants.len())];
-                return Interval::new(F64_PREC, val, val);
+                Interval::new(F64_PREC, val, val)
             } else {
                 let val: f64 = rng.gen_range(-sample_max..=sample_max);
-                return Interval::new(F64_PREC, val, val);
+                Interval::new(F64_PREC, val, val)
             }
+        // also generate small intervals
+        } else if rng.gen_bool(0.5) {
+            let val = rng.gen_range(-sample_max..=sample_max);
+            Interval::new(F64_PREC, val, val.next_after(f64::INFINITY))
+        } else {
+            let lo: f64 = rng.gen_range(-sample_max..=sample_max);
+            let hi = rng.gen_range(sample_max..=sample_max);
+            Interval::new(F64_PREC, lo, hi)
         }
-
-        let lo: f64 = rng.gen_range(-sample_max..=sample_max);
-        let hi = rng.gen_range(sample_max..=sample_max);
-        Interval::new(F64_PREC, lo, hi)
+        
     }
 
     #[test]
@@ -1307,6 +1357,7 @@ mod tests {
                 let finalival = ifun(&ival1, &ival2);
                 let finalreal = realfun(bf(F64_PREC, realval1), &bf(F64_PREC, realval2));
 
+                assert!(finalival.is_valid());
                 if finalreal {
                     assert!(
                         finalival.hi,
@@ -1327,10 +1378,11 @@ mod tests {
                 let finalival = ifun(&ival1, &ival2);
                 let finalreal = realfun(bf(F64_PREC, realval1), &bf(F64_PREC, realval2));
 
+                assert!(finalival.is_valid(), "{:?} and {:?} resulted in invalid interval for {}: {:?}", ival1, ival2, name, finalival);
                 if finalreal.is_nan() {
                     assert!(
                         finalival.err.hi,
-                        "{:?} and {:?} resulted in nan for {}. Expected possible error.",
+                        "{:?} and {:?} resulted in invalid value for {}. Expected possible error.",
                         ival1, ival2, name
                     );
                 } else {
@@ -1341,57 +1393,21 @@ mod tests {
                             ival1, ival2, name, finalreal
                         );
                     }
-                    assert!(
-                        finalreal <= finalival.hi(),
-                        "{}({} {}): {} <= {} \n Intervals: {:?} and {:?} to {:?}",
-                        name,
-                        realval1,
-                        realval2,
-                        finalreal,
-                        finalival.hi(),
-                        ival1,
-                        ival2,
-                        finalival
-                    );
-                    assert!(
-                        finalreal >= finalival.lo(),
-                        "{} >= {} \n {} with intervals: {:?} and {:?} to {:?}",
-                        finalreal,
-                        finalival.lo(),
-                        name,
-                        ival1,
-                        ival2,
-                        finalival
-                    );
+                    assert_contains(&finalival, finalreal, name);
                 }
             }
 
             for (name, ifun, realfun) in &single_operand_functions {
-                let lo1 = rng.gen_range(-40.0..=40.0);
-                let hi1 = rng.gen_range(lo1..=41.0);
-                let ival1 = Interval::new(F64_PREC, lo1, hi1);
-                let realval1 = rng.gen_range(lo1..=hi1);
+                let ival1 = random_interval();
+                let realval1 = rng.gen_range(ival1.lo().to_f64()..=ival1.hi().to_f64());
                 let finalival = ifun(&ival1);
                 let finalreal = realfun(bf(F64_PREC, realval1));
 
+                assert!(finalival.is_valid(), "{:?} resulted in invalid interval for {}: {:?}", ival1, name, finalival);
                 if finalreal.is_nan() {
-                    assert!(finalival.err.hi);
+                    assert!(finalival.err.hi, "Should have a possibility of error for {}({:?})", name, ival1);
                 } else {
-                    assert!(!finalival.err.lo);
-                    assert!(
-                        finalreal <= finalival.hi(),
-                        "{}: {} <= {}",
-                        name,
-                        finalreal,
-                        finalival.hi()
-                    );
-                    assert!(
-                        finalreal >= finalival.lo(),
-                        "{}: {} >= {}",
-                        name,
-                        finalreal,
-                        finalival.lo()
-                    );
+                    assert_contains(&finalival, finalreal, name);
                 }
             }
         }

@@ -16,3 +16,4 @@ description = "An interval arithmetic library with support for many functions an
 rug = "1.18.0"
 rand = "0.8.5"
 egg = "0.9.0"
+float_next_after = "1.0.0"
