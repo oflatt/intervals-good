@@ -580,70 +580,22 @@ impl Interval {
 
     // assumes x is negative or zero
     fn pow_neg(&self, other: &Interval) -> Interval {
-        let a_ceil = other.lo().ceil();
-        let b_floor = other.hi().floor();
-        let zero: Float = bf(self.lo().prec(), 0.0);
-        let xpos = self.fabs();
-
-        let error = ErrorInterval {
-            lo: self.err.lo || other.err.lo,
-            hi: self.err.hi || other.err.hi || other.lo() < other.hi(),
-        };
-        // between two integers
-        if b_floor < a_ceil {
-            if self.hi() == zero {
-                Interval::make(
-                    zero.clone(),
-                    zero,
-                    ErrorInterval {
-                        lo: self.err.lo,
-                        hi: true,
-                    },
-                )
-            } else {
-                Interval::make(
-                    bf(self.lo().prec(), f64::NAN),
-                    bf(self.lo().prec(), f64::NAN),
-                    ErrorInterval { lo: true, hi: true },
-                )
+        let mut err_possible = other.lo() < other.hi();
+        if !err_possible {
+            if let Some(rat) = other.lo().to_rational() {
+                err_possible = rat.denom().is_even();
             }
-        // around one integer
-        } else if a_ceil == b_floor {
-            let pos = xpos.pow_pos(&Interval::make(a_ceil.clone(), a_ceil.clone(), error));
-            if a_ceil.to_integer().unwrap().is_odd() {
-                pos.neg()
-            } else {
-                pos
-            }
-        } else {
-            let odds = Interval::make(
-                if a_ceil.to_integer().unwrap().is_odd() {
-                    a_ceil.clone()
-                } else {
-                    a_ceil.clone() + (1.0)
-                },
-                if b_floor.to_integer().unwrap().is_odd() {
-                    b_floor.clone()
-                } else {
-                    b_floor.clone() - (1.0)
-                },
-                error.clone(),
-            );
-            let evens = Interval::make(
-                if a_ceil.to_integer().unwrap().is_odd() {
-                    a_ceil + (1.0)
-                } else {
-                    a_ceil
-                },
-                if b_floor.to_integer().unwrap().is_odd() {
-                    b_floor - (1.0)
-                } else {
-                    b_floor
-                },
-                error,
-            );
-            xpos.pow_pos(&evens).union(&xpos.pow_pos(&odds).neg())
         }
+        let error = ErrorInterval {
+            lo: false,
+            hi: err_possible,
+        };
+
+        let x_pos = self.fabs();
+        let positive_ans = x_pos.pow_pos(other);
+        let mut res = positive_ans.union(&positive_ans.neg());
+        res.err = res.err.union(&error);
+        res
     }
 
     pub fn contains(&self, value: &Float) -> bool {
@@ -1216,6 +1168,20 @@ mod tests {
     use rand;
     use rand::Rng;
     use rug::ops::Pow;
+    use rug::{float::Round, ops::*, Float, Rational};
+
+    const NUM_TESTS: usize = 200_000;
+
+    fn rat_to_interval(rat: &Rational, prec: u32) -> Interval {
+        let mut lo = Float::with_val(prec, 0.0);
+        let mut hi = Float::with_val(prec, 0.0);
+        lo.add_from_round(rat, Round::Down);
+        hi.add_from_round(rat, Round::Up);
+        Interval::make(lo, hi, ErrorInterval {
+            lo: false,
+            hi: false,
+        })
+    }
 
     fn assert_contains(ival: &Interval, val: rug::Float, name: &Symbol) {
         assert!(
@@ -1258,7 +1224,20 @@ mod tests {
             let hi = rng.gen_range(sample_max..=sample_max);
             Interval::new(F64_PREC, lo, hi)
         }
-        
+    }
+
+    #[test]
+    fn test_pos_fractional_power() {
+        let one_third = rat_to_interval(&Rational::from((1, 3)), F64_PREC);
+        let mut rng = rand::thread_rng();
+
+        for i in 0..NUM_TESTS {
+            let ival1 = random_interval();
+            let y = ival1.pow(&one_third);
+            let realval1 = rng.gen_range(ival1.lo().to_f64()..=ival1.hi().to_f64());
+            assert_contains(&y, bf(F64_PREC, realval1.cbrt()), &"pow_cbrt".into());
+            assert!(!y.err.lo);
+        }
     }
 
     #[test]
@@ -1347,7 +1326,7 @@ mod tests {
         ];
         let mut rng = rand::thread_rng();
 
-        for _i in 0..200_000 {
+        for _i in 0..NUM_TESTS {
             for (name, ifun, realfun) in &to_boolean_functions {
                 let ival1 = random_interval();
                 let ival2 = random_interval();
