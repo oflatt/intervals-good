@@ -60,7 +60,7 @@ impl BooleanInterval {
             err: ErrorInterval::default(),
         }
     }
-    
+
     pub fn and(&self, other: &BooleanInterval) -> BooleanInterval {
         BooleanInterval {
             lo: self.lo && other.lo,
@@ -188,8 +188,8 @@ impl Interval {
 
     pub fn new(prec: u32, lo: f64, hi: f64) -> Interval {
         Interval {
-            lo: OrdFloat::from(bf(prec, lo)),
-            hi: OrdFloat::from(bf(prec, hi)),
+            lo: Interval::to_ord(bf(prec, lo)),
+            hi: Interval::to_ord(bf(prec, hi)),
             err: ErrorInterval {
                 lo: false,
                 hi: false,
@@ -197,10 +197,18 @@ impl Interval {
         }
     }
 
+    fn to_ord(float: Float) -> OrdFloat {
+        if float.is_zero() {
+            OrdFloat::from(bf(float.prec(), 0.0))
+        } else {
+            OrdFloat::from(float)
+        }
+    }
+
     pub fn make(lo: Float, hi: Float, err: ErrorInterval) -> Interval {
         Interval {
-            lo: OrdFloat::from(lo),
-            hi: OrdFloat::from(hi),
+            lo: Interval::to_ord(lo),
+            hi: Interval::to_ord(hi),
             err,
         }
     }
@@ -492,11 +500,19 @@ impl Interval {
     // assumes self is positive or zero
     fn pow_pos(&self, other: &Interval) -> Interval {
         let perform_pow = |lo1: &Float, lo2: &Float, hi1: &Float, hi2: &Float| {
+            let err = ErrorInterval {
+                lo: self.err.lo
+                    || other.err.lo
+                    || (self.hi().is_zero() && other.hi() <= bf(other.hi().prec(), 0.0)),
+                hi: self.err.hi
+                    || other.err.hi
+                    || (self.lo().is_zero() && other.lo() <= bf(other.hi().prec(), 0.0)),
+            };
             let mut tmp_lo = lo1.clone();
             tmp_lo.pow_assign_round(lo2, Round::Down);
             let mut tmp_hi = hi1.clone();
             tmp_hi.pow_assign_round(hi2, Round::Up);
-            Interval::make(tmp_lo, tmp_hi, self.err.union(&other.err))
+            Interval::make(tmp_lo, tmp_hi, err)
         };
 
         // copied from mult (just replaced name with perform_pow)
@@ -535,17 +551,20 @@ impl Interval {
         }
     }
 
-    // assumes x negative
+    // assumes x is negative or zero
     fn pow_neg(&self, other: &Interval) -> Interval {
-        let pow_ceil = other.lo().ceil();
-        let pow_floor = other.hi().floor();
+        println!("pow_neg: {:?} ^ {:?}", self, other);
+        let a_ceil = other.lo().ceil();
+        let b_floor = other.hi().floor();
         let zero: Float = bf(self.lo().prec(), 0.0);
+        let xpos = self.fabs();
 
         let error = ErrorInterval {
             lo: self.err.lo || other.err.lo,
             hi: self.err.hi || other.err.hi || other.lo() < other.hi(),
         };
-        if pow_floor < pow_ceil {
+        // between two integers
+        if b_floor < a_ceil {
             if self.hi() == zero {
                 Interval::make(
                     zero.clone(),
@@ -562,45 +581,43 @@ impl Interval {
                     ErrorInterval { lo: true, hi: true },
                 )
             }
-        } else if pow_ceil == pow_floor {
-            let pos =
-                self.fabs()
-                    .pow_pos(&Interval::make(pow_ceil.clone(), pow_ceil.clone(), error));
-            if pow_ceil.to_integer().unwrap().is_odd() {
+        // around one integer
+        } else if a_ceil == b_floor {
+            println!("xpos is {:?}", xpos);
+            let pos = xpos.pow_pos(&Interval::make(a_ceil.clone(), a_ceil.clone(), error));
+            if a_ceil.to_integer().unwrap().is_odd() {
                 pos.neg()
             } else {
                 pos
             }
         } else {
             let odds = Interval::make(
-                if pow_ceil.clone().to_integer().unwrap().is_odd() {
-                    pow_ceil.clone()
+                if a_ceil.to_integer().unwrap().is_odd() {
+                    a_ceil.clone()
                 } else {
-                    pow_ceil.clone() + (1.0)
+                    a_ceil.clone() + (1.0)
                 },
-                if pow_floor.to_integer().unwrap().is_odd() {
-                    pow_floor.clone()
+                if b_floor.to_integer().unwrap().is_odd() {
+                    b_floor.clone()
                 } else {
-                    pow_floor.clone() - (1.0)
+                    b_floor.clone() - (1.0)
                 },
                 error.clone(),
             );
             let evens = Interval::make(
-                if pow_ceil.clone().to_integer().unwrap().is_odd() {
-                    pow_ceil + (1.0)
+                if a_ceil.to_integer().unwrap().is_odd() {
+                    a_ceil + (1.0)
                 } else {
-                    pow_ceil
+                    a_ceil
                 },
-                if pow_floor.to_integer().unwrap().is_odd() {
-                    pow_floor - (1.0)
+                if b_floor.to_integer().unwrap().is_odd() {
+                    b_floor - (1.0)
                 } else {
-                    pow_floor
+                    b_floor
                 },
                 error,
             );
-            self.fabs()
-                .pow_pos(&evens)
-                .union(&self.fabs().pow_pos(&odds).neg())
+            xpos.pow_pos(&evens).union(&xpos.pow_pos(&odds).neg())
         }
     }
 
@@ -934,8 +951,8 @@ impl Interval {
     pub fn fmod(&self, other: &Interval) -> Interval {
         let zero = bf(self.lo().prec(), 0.0);
         let error = ErrorInterval {
-            lo: self.err.lo || other.err.lo || (self.lo() == zero && self.hi() == zero),
-            hi: self.err.lo || other.err.lo || (self.lo() <= zero && self.hi() >= zero),
+            lo: self.err.lo || other.err.lo || (other.lo() == zero && other.hi() == zero),
+            hi: self.err.lo || other.err.lo || (other.lo() <= zero && other.hi() >= zero),
         };
 
         let abs_other = other.fabs();
@@ -1020,8 +1037,8 @@ impl Interval {
     pub fn remainder(&self, other: &Interval) -> Interval {
         let zero = bf(self.lo().prec(), 0.0);
         let error = ErrorInterval {
-            lo: self.err.lo || other.err.lo || (self.lo() == zero && self.hi() == zero),
-            hi: self.err.lo || other.err.lo || (self.lo() <= zero && self.hi() >= zero),
+            lo: self.err.lo || other.err.lo || (other.lo() == zero && other.hi() == zero),
+            hi: self.err.lo || other.err.lo || (other.lo() <= zero && other.hi() >= zero),
         };
 
         let abs_other = other.fabs();
@@ -1167,6 +1184,8 @@ impl Interval {
 
 #[cfg(test)]
 mod tests {
+    use std::f64::NAN;
+
     use super::*;
     use egg::Symbol;
     use rand;
@@ -1175,8 +1194,21 @@ mod tests {
 
     fn random_interval() -> Interval {
         let mut rng = rand::thread_rng();
-        let lo: f64 = rng.gen_range(-40.0..40.0);
-        let hi = rng.gen_range(lo..41.0);
+
+        // half the time generate constants
+        if rng.gen_bool(0.5) {
+            let constants = vec![0.0, -1.0, 1.0, 0.5];
+            if rng.gen_bool(0.8) {
+                let val: f64 = constants[rng.gen_range(0..constants.len())];
+                return Interval::new(F64_PREC, val, val);
+            } else {
+                let val: f64 = rng.gen_range(-40.0..=40.0);
+                return Interval::new(F64_PREC, val, val);
+            }
+        }
+
+        let lo: f64 = rng.gen_range(-40.0..=0.0);
+        let hi = rng.gen_range(lo..=41.0);
         Interval::new(F64_PREC, lo, hi)
     }
 
@@ -1197,8 +1229,20 @@ mod tests {
             ("mul".into(), Interval::mul, |x, y| x * y),
             ("div".into(), Interval::div, |x, y| x / y),
             ("hypot".into(), Interval::hypot, |x, y| x.hypot(y)),
-            ("pow".into(), Interval::pow, |x, y| x.pow(y)),
-            ("atan2".into(), Interval::atan2, Float::atan2),
+            ("pow".into(), Interval::pow, |x, y| {
+                if x.is_zero() && y.is_zero() {
+                    Float::with_val(F64_PREC, NAN)
+                } else {
+                    x.pow(y)
+                }
+            }),
+            ("atan2".into(), Interval::atan2, |x, y| {
+                if x.is_zero() && y.is_zero() {
+                    Float::with_val(F64_PREC, NAN)
+                } else {
+                    x.atan2(y)
+                }
+            }),
             ("fmod".into(), Interval::fmod, |x, y| x % y),
             ("remainder".into(), Interval::remainder, |x, y| {
                 x.remainder(y)
@@ -1259,8 +1303,8 @@ mod tests {
                 let ival1 = random_interval();
                 let ival2 = random_interval();
 
-                let realval1 = rng.gen_range(ival1.lo().to_f64()..ival1.hi().to_f64());
-                let realval2 = rng.gen_range(ival2.lo().to_f64()..ival2.hi().to_f64());
+                let realval1 = rng.gen_range(ival1.lo().to_f64()..=ival1.hi().to_f64());
+                let realval2 = rng.gen_range(ival2.lo().to_f64()..=ival2.hi().to_f64());
                 let finalival = ifun(&ival1, &ival2);
                 let finalreal = realfun(bf(F64_PREC, realval1), &bf(F64_PREC, realval2));
 
@@ -1279,19 +1323,25 @@ mod tests {
                 let ival1 = random_interval();
                 let ival2 = random_interval();
 
-                let realval1 = rng.gen_range(ival1.lo().to_f64()..ival1.hi().to_f64());
-                let realval2 = rng.gen_range(ival2.lo().to_f64()..ival2.hi().to_f64());
+                let realval1 = rng.gen_range(ival1.lo().to_f64()..=ival1.hi().to_f64());
+                let realval2 = rng.gen_range(ival2.lo().to_f64()..=ival2.hi().to_f64());
                 let finalival = ifun(&ival1, &ival2);
                 let finalreal = realfun(bf(F64_PREC, realval1), &bf(F64_PREC, realval2));
 
                 if finalreal.is_nan() {
-                    assert!(finalival.err.hi);
-                } else {
                     assert!(
-                        !finalival.err.lo,
-                        "{} and {} gave us a guaranteed error for {}. Got: {}",
-                        realval1, realval2, name, finalreal
+                        finalival.err.hi,
+                        "{:?} and {:?} resulted in nan for {}. Expected possible error.",
+                        ival1, ival2, name
                     );
+                } else {
+                    if finalreal.is_finite() {
+                        assert!(
+                            !finalival.err.lo,
+                            "{:?} and {:?} gave us a guaranteed error for {}. Got: {}",
+                            ival1, ival2, name, finalreal
+                        );
+                    }
                     assert!(
                         finalreal <= finalival.hi(),
                         "{}({} {}): {} <= {} \n Intervals: {:?} and {:?} to {:?}",
@@ -1306,18 +1356,22 @@ mod tests {
                     );
                     assert!(
                         finalreal >= finalival.lo(),
-                        "{} >= {}",
+                        "{} >= {} \n {} with intervals: {:?} and {:?} to {:?}",
                         finalreal,
-                        finalival.lo()
+                        finalival.lo(),
+                        name,
+                        ival1,
+                        ival2,
+                        finalival
                     );
                 }
             }
 
             for (name, ifun, realfun) in &single_operand_functions {
-                let lo1 = rng.gen_range(-40.0..40.0);
-                let hi1 = rng.gen_range(lo1..41.0);
+                let lo1 = rng.gen_range(-40.0..=40.0);
+                let hi1 = rng.gen_range(lo1..=41.0);
                 let ival1 = Interval::new(F64_PREC, lo1, hi1);
-                let realval1 = rng.gen_range(lo1..hi1);
+                let realval1 = rng.gen_range(lo1..=hi1);
                 let finalival = ifun(&ival1);
                 let finalreal = realfun(bf(F64_PREC, realval1));
 
