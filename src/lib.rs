@@ -626,10 +626,6 @@ impl Interval {
             self.pow_pos(other)
         } else if let Some((neg, pos)) = self.split(&bf(self.lo().prec(), 0.0)) {
             neg.pow_neg(other).union(&pos.pow_pos(other))
-        } else if self.lo().is_sign_positive() {
-            self.pow_pos(other)
-        } else if self.hi().is_sign_positive() {
-            self.pow_neg(other)
         } else {
             assert!(self.err.hi);
             Interval::make(
