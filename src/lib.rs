@@ -34,6 +34,14 @@ impl ErrorInterval {
     pub fn is_valid(&self) -> bool {
         !self.lo || self.hi
     }
+
+    pub fn is_guaranteed(&self) -> bool {
+        self.lo
+    }
+
+    pub fn is_possible(&self) -> bool {
+        self.hi
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -300,7 +308,7 @@ impl Interval {
             let mut lo = lo1.clone();
             lo.mul_add_round(lo2, &bf(lo1.prec(), 0.0), Round::Down);
             let mut hi = hi1.clone();
-            hi.mul_add_round(&hi2, &bf(hi1.prec(), 0.0), Round::Up);
+            hi.mul_add_round(hi2, &bf(hi1.prec(), 0.0), Round::Up);
             Interval::make(lo, hi, self.err.union(&other.err))
         };
 
@@ -805,7 +813,7 @@ impl Interval {
             let mut hitmp = hi1.clone();
             lotmp.atan2_round(lo2, Round::Down);
             hitmp.atan2_round(hi2, Round::Up);
-            Interval::make(lotmp, hitmp, self.err.clone())
+            Interval::make(lotmp, hitmp, self.err.union(&other.err))
         };
 
         use IntervalClassification::*;
@@ -929,7 +937,7 @@ impl Interval {
         let zero = bf(self.lo().prec(), 0.0);
         let error = ErrorInterval {
             lo: self.err.lo || other.err.lo || (other.lo() == zero && other.hi() == zero),
-            hi: self.err.lo || other.err.lo || (other.lo() <= zero && other.hi() >= zero),
+            hi: self.err.hi || other.err.hi || (other.lo() <= zero && other.hi() >= zero),
         };
 
         let abs_other = other.fabs();
@@ -1015,7 +1023,7 @@ impl Interval {
         let zero = bf(self.lo().prec(), 0.0);
         let error = ErrorInterval {
             lo: self.err.lo || other.err.lo || (other.lo() == zero && other.hi() == zero),
-            hi: self.err.lo || other.err.lo || (other.lo() <= zero && other.hi() >= zero),
+            hi: self.err.hi || other.err.hi || (other.lo() <= zero && other.hi() >= zero),
         };
 
         let abs_other = other.fabs();
@@ -1201,10 +1209,29 @@ mod tests {
         );
     }
 
+    fn random_error() -> ErrorInterval {
+        let mut rng = rand::thread_rng();
+        if rng.gen_bool(0.05) {
+            ErrorInterval {
+                lo: true,
+                hi: true,
+            }
+        } else if rng.gen_bool(0.05) {
+            ErrorInterval {
+                lo: false,
+                hi: true,
+            }
+        } else {
+            ErrorInterval {
+                lo: false,
+                hi: false,
+            }   
+        }
+    }
+
     fn random_interval() -> Interval {
         let mut rng = rand::thread_rng();
         let sample_max = 100000000000000000.0;
-
         // half the time generate constants
         if rng.gen_bool(0.5) {
             let constants = vec![0.0, -1.0, 1.0, 0.5];
@@ -1231,12 +1258,21 @@ mod tests {
         let one_third = rat_to_interval(&Rational::from((1, 3)), F64_PREC);
         let mut rng = rand::thread_rng();
 
-        for i in 0..NUM_TESTS {
+        for _i in 0..NUM_TESTS {
             let ival1 = random_interval();
-            let y = ival1.pow(&one_third);
+
+            let upper = if rng.gen_bool(0.8) {
+                random_interval().union(&one_third)
+            } else {
+                one_third.clone()
+            };
+            let y = ival1.pow(&upper);
             let realval1 = rng.gen_range(ival1.lo().to_f64()..=ival1.hi().to_f64());
             assert_contains(&y, bf(F64_PREC, realval1.cbrt()), &"pow_cbrt".into());
             assert!(!y.err.lo);
+            if ival1.lo() < 0.0 {
+                assert!(y.err.hi);
+            }
         }
     }
 
@@ -1325,7 +1361,7 @@ mod tests {
             ("erfc".into(), Interval::erfc, Float::erfc),
         ];
         let mut rng = rand::thread_rng();
-
+            
         for _i in 0..NUM_TESTS {
             for (name, ifun, realfun) in &to_boolean_functions {
                 let ival1 = random_interval();
@@ -1348,9 +1384,10 @@ mod tests {
                 }
             }
 
+            // todo collapse duplicated code into one function, using this as template
             for (name, ifun, realfun) in &interval_functions {
-                let ival1 = random_interval();
-                let ival2 = random_interval();
+                let ival1 = random_interval().with_error(random_error());
+                let ival2 = random_interval().with_error(random_error());
 
                 let realval1 = rng.gen_range(ival1.lo().to_f64()..=ival1.hi().to_f64());
                 let realval2 = rng.gen_range(ival2.lo().to_f64()..=ival2.hi().to_f64());
@@ -1358,7 +1395,16 @@ mod tests {
                 let finalreal = realfun(bf(F64_PREC, realval1), &bf(F64_PREC, realval2));
 
                 assert!(finalival.is_valid(), "{:?} and {:?} resulted in invalid interval for {}: {:?}", ival1, ival2, name, finalival);
-                if finalreal.is_nan() {
+
+                if ival1.err.is_possible() || ival2.err.is_possible() {
+                    assert!(finalival.err.is_possible(),
+                            "{:?} and {:?} resulted in no possible error for {}. Got: {:?}",
+                            ival1, ival2, name, finalival);
+                }
+
+                if ival1.err.is_guaranteed() || ival2.err.is_guaranteed() {
+                    assert!(finalival.err.is_guaranteed());
+                } else if finalreal.is_nan() {
                     assert!(
                         finalival.err.hi,
                         "{:?} and {:?} resulted in invalid value for {}. Expected possible error.",
