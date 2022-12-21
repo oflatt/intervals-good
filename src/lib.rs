@@ -357,7 +357,7 @@ impl Interval {
             let mut hi = hi1.clone();
             hi.div_assign_round(hi2, Round::Up);
 
-            Interval::make(lo, hi, self.err.union(&other.err))
+            Interval::make(lo, hi, error.clone())
         };
 
         use IntervalClassification::*;
