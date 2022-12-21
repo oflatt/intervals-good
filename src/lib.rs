@@ -110,7 +110,8 @@ impl BooleanInterval {
         } else if !self.hi {
             third.with_error(self.err.union(&third.err))
         } else {
-            other.union(third)
+            let res = other.union(third);
+            res.with_error(self.err.union(&res.err))
         }
     }
 
