@@ -31,6 +31,13 @@ impl ErrorInterval {
         }
     }
 
+    pub fn union_disjoint(&self, other: &ErrorInterval) -> ErrorInterval {
+        ErrorInterval {
+            lo: self.lo && other.lo,
+            hi: self.hi || other.hi,
+        }
+    }
+
     pub fn is_valid(&self) -> bool {
         !self.lo || self.hi
     }
@@ -120,6 +127,14 @@ impl BooleanInterval {
             lo: self.lo || other.lo,
             hi: self.hi || other.hi,
             err: self.err.union(&other.err),
+        }
+    }
+
+    pub fn union_disjoint(&self, other: &BooleanInterval) -> BooleanInterval {
+        BooleanInterval {
+            lo: self.lo && other.lo,
+            hi: self.hi || other.hi,
+            err: self.err.union_disjoint(&other.err),
         }
     }
 
@@ -260,6 +275,14 @@ impl Interval {
         )
     }
 
+    pub fn union_disjoint(&self, other: &Interval) -> Interval {
+        Interval::make(
+            self.lo().min(&other.lo()),
+            self.hi().max(&other.hi()),
+            self.err.union_disjoint(&other.err),
+        )
+    }
+
     pub fn neg(&self) -> Interval {
         Interval::make(-self.hi(), -self.lo(), self.err.clone())
     }
@@ -339,7 +362,7 @@ impl Interval {
 
             (Mixed, StrictlyNeg) => perform_mult(&self.hi(), &other.lo(), &self.lo(), &other.lo()),
 
-            (Mixed, Mixed) => perform_mult(&self.hi(), &other.lo(), &self.lo(), &other.lo()).union(
+            (Mixed, Mixed) => perform_mult(&self.hi(), &other.lo(), &self.lo(), &other.lo()).union_disjoint(
                 &perform_mult(&self.lo(), &other.hi(), &self.hi(), &other.hi()),
             ),
         }
@@ -581,7 +604,7 @@ impl Interval {
 
             (Mixed, StrictlyNeg) => perform_pow(&self.hi(), &other.lo(), &self.lo(), &other.lo()),
 
-            (Mixed, Mixed) => perform_pow(&self.hi(), &other.lo(), &self.lo(), &other.lo()).union(
+            (Mixed, Mixed) => perform_pow(&self.hi(), &other.lo(), &self.lo(), &other.lo()).union_disjoint(
                 &perform_pow(&self.lo(), &other.hi(), &self.hi(), &other.hi()),
             ),
         }
@@ -595,15 +618,16 @@ impl Interval {
                 err_possible = rat.denom().is_even();
             }
         }
+        // TODO compute guaranteed error as well
         let error = ErrorInterval {
             lo: false,
             hi: err_possible,
-        };
+        }.union(&self.err).union(&other.err);
 
         let x_pos = self.fabs();
         let positive_ans = x_pos.pow_pos(other);
-        let mut res = positive_ans.union(&positive_ans.neg());
-        res.err = res.err.union(&error);
+        let mut res = positive_ans.union_disjoint(&positive_ans.neg());
+        res.err = res.err.union_disjoint(&error);
         res
     }
 
@@ -628,7 +652,7 @@ impl Interval {
         } else if self.lo() >= bf(self.lo().prec(), 0.0) {
             self.pow_pos(other)
         } else if let Some((neg, pos)) = self.split(&bf(self.lo().prec(), 0.0)) {
-            neg.pow_neg(other).union(&pos.pow_pos(other))
+            neg.pow_neg(other).union_disjoint(&pos.pow_pos(other))
         } else {
             assert!(self.err.hi);
             Interval::make(
@@ -950,7 +974,7 @@ impl Interval {
         } else {
             let (neg, pos) = self.split(&zero).unwrap();
             pos.fmod_pos(&abs_other)
-                .union(&neg.neg().fmod_pos(&abs_other).neg())
+                .union_disjoint(&neg.neg().fmod_pos(&abs_other).neg())
                 .with_error(error)
         }
     }
@@ -1036,7 +1060,7 @@ impl Interval {
         } else {
             let (neg, pos) = self.split(&zero).unwrap();
             pos.remainder_pos(&abs_other)
-                .union(&neg.neg().remainder_pos(&abs_other).neg())
+                .union_disjoint(&neg.neg().remainder_pos(&abs_other).neg())
                 .with_error(error)
         }
     }
@@ -1237,8 +1261,15 @@ mod tests {
         if rng.gen_bool(0.5) {
             let constants = vec![0.0, -1.0, 1.0, 0.5];
             if rng.gen_bool(0.8) {
-                let val: f64 = constants[rng.gen_range(0..constants.len())];
-                Interval::new(F64_PREC, val, val)
+                let mut lo: f64 = constants[rng.gen_range(0..constants.len())];
+                let mut hi = lo.clone();
+                // nudge the interval sometimes, catches pow bugs
+                if rng.gen_bool(0.2) {
+                    hi += rng.gen_range(0.0..=0.1);
+                } else if rng.gen_bool(0.2) {
+                    lo -= rng.gen_range(0.0..=0.1);
+                }
+                Interval::new(F64_PREC, lo, hi)
             } else {
                 let val: f64 = rng.gen_range(-sample_max..=sample_max);
                 Interval::new(F64_PREC, val, val)
@@ -1295,7 +1326,7 @@ mod tests {
             ("div".into(), Interval::div, |x, y| x / y),
             ("hypot".into(), Interval::hypot, |x, y| x.hypot(y)),
             ("pow".into(), Interval::pow, |x, y| {
-                if x.is_zero() && y.is_zero() {
+                if x.is_zero() && (y.is_zero() || y.is_sign_negative()) {
                     Float::with_val(F64_PREC, NAN)
                 } else {
                     x.pow(y)
@@ -1404,7 +1435,7 @@ mod tests {
                 }
 
                 if ival1.err.is_guaranteed() || ival2.err.is_guaranteed() {
-                    assert!(finalival.err.is_guaranteed());
+                    assert!(finalival.err.is_guaranteed(), "{:?} and {:?} resulted in no guaranteed error for {}. Got: {:?}", ival1, ival2, name, finalival);
                 } else if finalreal.is_nan() {
                     assert!(
                         finalival.err.hi,
