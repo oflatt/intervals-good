@@ -1,8 +1,11 @@
+use std::f64::INFINITY;
+
 use rug::{
     float::Constant, float::OrdFloat, float::Round, float::Special, ops::AssignRound,
     ops::DivAssignRound, ops::PowAssignRound, Float,
 };
 
+use rand::Rng;
 use float_next_after::NextAfter;
 
 
@@ -216,6 +219,33 @@ impl Interval {
     pub fn is_valid(&self) -> bool {
         // ordered and signes ordered, and not just infinite values
         self.lo <= self.hi && self.err.is_valid() && !(self.hi().is_infinite() && self.hi == self.lo && !self.err.lo)
+    }
+
+    // work around gen_range not being able to handle infinities
+    pub fn sample_f64(&self) -> f64 {
+        let mut rng = rand::thread_rng();
+
+        let mut lo = self.lo().to_f64();
+        let mut hi = self.hi().to_f64();
+        if lo == hi && lo == f64::INFINITY {
+                return f64::INFINITY;
+        } else if lo == hi && lo == -f64::INFINITY {
+                return -f64::INFINITY;
+        }
+        
+        if lo == -f64::INFINITY {
+            if rng.gen_bool(0.1) {
+                return -f64::INFINITY;
+            }
+            lo = f64::MIN;
+        }
+        if hi == f64::INFINITY {
+            if rng.gen_bool(0.1) {
+                return f64::INFINITY;
+            }
+            hi = f64::MAX;
+        }
+        rng.gen_range(lo..=hi)
     }
     
     fn lo(&self) -> Float {
@@ -1202,7 +1232,7 @@ impl Interval {
 
 #[cfg(test)]
 mod tests {
-    use std::f64::NAN;
+    use std::f64::{NAN, INFINITY};
 
     use super::*;
     use egg::Symbol;
@@ -1267,7 +1297,7 @@ mod tests {
         let sample_max = 100000000000000000.0;
         // half the time generate constants
         if rng.gen_bool(0.5) {
-            let constants = vec![0.0, -1.0, 1.0, 0.5];
+            let constants = vec![0.0, -1.0, 1.0, 0.5, -0.5, 2.0, INFINITY, -INFINITY];
             if rng.gen_bool(0.8) {
                 let mut lo: f64 = constants[rng.gen_range(0..constants.len())];
                 let mut hi = lo.clone();
@@ -1307,7 +1337,7 @@ mod tests {
                 one_third.clone()
             };
             let y = ival1.pow(&upper);
-            let realval1 = rng.gen_range(ival1.lo().to_f64()..=ival1.hi().to_f64());
+            let realval1 = ival1.sample_f64();
             assert_contains(&y, bf(F64_PREC, realval1.cbrt()), &"pow_cbrt".into());
             assert!(!y.err.lo);
             if ival1.lo() < 0.0 {
@@ -1407,8 +1437,8 @@ mod tests {
                 let ival1 = random_interval();
                 let ival2 = random_interval();
 
-                let realval1 = rng.gen_range(ival1.lo().to_f64()..=ival1.hi().to_f64());
-                let realval2 = rng.gen_range(ival2.lo().to_f64()..=ival2.hi().to_f64());
+                let realval1 = ival1.sample_f64();
+                let realval2 = ival2.sample_f64();
                 let finalival = ifun(&ival1, &ival2);
                 let finalreal = realfun(bf(F64_PREC, realval1), &bf(F64_PREC, realval2));
 
@@ -1429,8 +1459,8 @@ mod tests {
                 let ival1 = random_interval().with_error(random_error());
                 let ival2 = random_interval().with_error(random_error());
 
-                let realval1 = rng.gen_range(ival1.lo().to_f64()..=ival1.hi().to_f64());
-                let realval2 = rng.gen_range(ival2.lo().to_f64()..=ival2.hi().to_f64());
+                let realval1 = ival1.sample_f64();
+                let realval2 = ival2.sample_f64();
                 let finalival = ifun(&ival1, &ival2);
                 let finalreal = realfun(bf(F64_PREC, realval1), &bf(F64_PREC, realval2));
 
@@ -1464,7 +1494,7 @@ mod tests {
 
             for (name, ifun, realfun) in &single_operand_functions {
                 let ival1 = random_interval();
-                let realval1 = rng.gen_range(ival1.lo().to_f64()..=ival1.hi().to_f64());
+                let realval1 = ival1.sample_f64();
                 let finalival = ifun(&ival1);
                 let finalreal = realfun(bf(F64_PREC, realval1));
 
