@@ -612,13 +612,21 @@ impl Interval {
 
     // assumes x is negative or zero
     fn pow_neg(&self, other: &Interval) -> Interval {
-        let mut err_possible = other.lo() < other.hi();
-        if !err_possible {
+        let zero = bf(self.lo().prec(), 0.0);
+        // check if it includes 0 ^ 0
+        let mut err_possible = self.hi().is_zero() && other.lo() <= zero && zero <= other.hi();
+        
+        // now check negative to an even fraction
+        if (self.lo() < zero) && other.lo() < other.hi() {
+            err_possible = true;
+        // negative to even fraction when the exponent is exact
+        } else if self.lo() < zero {
             if let Some(rat) = other.lo().to_rational() {
-                err_possible = rat.denom().is_even();
+                err_possible = err_possible || rat.denom().is_even();
             }
         }
-        // TODO compute guaranteed error as well
+
+        // TODO compute guaranteed error
         let error = ErrorInterval {
             lo: false,
             hi: err_possible,
