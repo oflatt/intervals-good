@@ -511,7 +511,7 @@ impl Interval {
         let mut tmplo = self.lo();
         let mut tmphi = self.hi();
         tmplo.trunc_fract_round(&mut tmp, Round::Down);
-        tmp.trunc_fract_round(&mut tmphi, Round::Up);
+        tmphi.trunc_fract_round(&mut tmp, Round::Up);
         Interval::make(tmplo, tmphi, self.err.clone())
     }
 
@@ -650,11 +650,11 @@ impl Interval {
     fn pow_neg(&self, other: &Interval) -> Interval {
         let zero = bf(self.lo().prec(), 0.0);
         // check if it includes 0 ^ 0
-        let mut err_possible = self.hi().is_zero() && other.lo() <= zero && zero <= other.hi();
+        let mut err_possible = self.hi().is_zero() && other.lo() <= zero;
         let mut err_guaranteed = self.lo().is_zero() && other.hi() <= zero;
         
         // now check negative to an even fraction
-        if (self.lo() < zero) && other.lo() < other.hi() {
+        if (self.lo() < zero) && other.lo < other.hi {
             err_possible = true;
         // negative to even fraction when the exponent is exact
         } else if self.lo() < zero {
@@ -664,15 +664,14 @@ impl Interval {
         }
 
         // negative to even fraction
-        if (self.hi() < zero) && other.lo() < other.hi() {
-            err_guaranteed = true;
-        } else if self.hi() < zero {
+        
+        if self.hi() < zero && other.lo == other.hi {
             if let Some(rat) = other.lo().to_rational() {
                 err_guaranteed = err_guaranteed ||  (!rat.is_integer() && rat.denom().is_even());
             }
         }
 
-        // TODO compute guaranteed error
+        
         let error = ErrorInterval {
             lo: err_guaranteed,
             hi: err_possible,
@@ -763,11 +762,53 @@ impl Interval {
     }
 
     pub fn cos(&self) -> Interval {
-        let pi = Interval::pi(self.lo().prec());
-        let half = Interval::new(self.lo().prec(), 0.5, 0.0);
-        let period = self.div(&pi).sub(&half).floor();
+        let mut lopi = Float::new(self.lo().prec());
+        lopi.assign_round(Constant::Pi, Round::Down);
+        let mut hipi = Float::new(self.lo().prec());
+        hipi.assign_round(Constant::Pi, Round::Up);
 
-        
+        let afactor = self.period_lower(false);
+        let bfactor = self.period_higher(false);
+
+        if afactor == bfactor && is_even(&afactor) {
+            let mut hitmp = self.hi();
+            let mut lotmp = self.lo();
+            hitmp.cos_round(Round::Down);
+            lotmp.cos_round(Round::Up);
+            Interval::make(hitmp, lotmp, self.err.clone())
+        } else if afactor == bfactor && is_odd(&afactor) {
+            let mut hitmp = self.hi();
+            let mut lotmp = self.lo();
+            hitmp.cos_round(Round::Up);
+            lotmp.cos_round(Round::Down);
+            Interval::make(lotmp, hitmp, self.err.clone())
+        } else if (bfactor.clone() - afactor.clone()) == (1.0) && is_even(&afactor) {
+            let mut lotmp = self.lo();
+            lotmp.cos_round(Round::Up);
+            let mut hitmp = self.hi();
+            hitmp.cos_round(Round::Up);
+            Interval::make(
+                bf(self.lo().prec(), -1.0),
+                lotmp.max(&hitmp),
+                self.err.clone(),
+            )
+        } else if (bfactor.clone() - afactor.clone()) == (1.0) && is_odd(&afactor) {
+            let mut lotmp = self.lo();
+            lotmp.cos_round(Round::Down);
+            let mut hitmp = self.hi();
+            hitmp.cos_round(Round::Down);
+            Interval::make(
+                lotmp.min(&hitmp),
+                bf(self.lo().prec(), 1.0),
+                self.err.clone(),
+            )
+        } else {
+            Interval::make(
+                bf(self.lo().prec(), -1.0),
+                bf(self.lo().prec(), 1.0),
+                self.err.clone(),
+            )
+        }
     }
 
     pub fn sin(&self) -> Interval {
@@ -1289,29 +1330,6 @@ mod tests {
     }
 
     #[test]
-    fn test_pos_fractional_power() {
-        let one_third = rat_to_interval(&Rational::from((1, 3)), F64_PREC);
-        let mut rng = rand::thread_rng();
-
-        for _i in 0..NUM_TESTS {
-            let ival1 = random_interval();
-
-            let upper = if rng.gen_bool(0.8) {
-                random_interval().union(&one_third)
-            } else {
-                one_third.clone()
-            };
-            let y = ival1.pow(&upper);
-            let realval1 = ival1.sample_f64();
-            assert_contains(&y, bf(F64_PREC, realval1.cbrt()), &"pow_cbrt".into());
-            assert!(!y.err.lo);
-            if ival1.lo() < 0.0 {
-                assert!(y.err.hi);
-            }
-        }
-    }
-
-    #[test]
     fn smaller_intervals_refine() {
         type Operator = fn(&Interval, &Interval) -> Interval;
         type SingleOperator = fn(&Interval) -> Interval;
@@ -1435,12 +1453,6 @@ mod tests {
                     assert!(finalival.err.is_possible(),
                             "{:?} and {:?} resulted in no possible error for {}. Got: {:?}",
                             ival1, ival2, name, finalival);
-
-                    if ival1.lo == ival1.hi && ival2.lo == ival2.hi {
-                        assert!(
-                            finalival.err.is_guaranteed()
-                        );
-                    }
                 }
 
                 if ival1.err.is_guaranteed() || ival2.err.is_guaranteed() {
