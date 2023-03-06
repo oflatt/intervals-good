@@ -6,7 +6,6 @@ use rug::{
 };
 
 use rand::Rng;
-use float_next_after::NextAfter;
 
 
 const F64_PREC: u32 = 53;
@@ -1243,8 +1242,7 @@ mod tests {
     use std::f64::{NAN, INFINITY};
 
     use super::*;
-    use egg::Symbol;
-    use rand;
+    use symbol_table::GlobalSymbol as Symbol;
     use rand::Rng;
     use rug::ops::Pow;
     use rug::{float::Round, ops::*, Float, Rational};
