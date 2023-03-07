@@ -1,8 +1,8 @@
 use std::f64::INFINITY;
 
 use rug::{
-    float::Constant, float::OrdFloat, float::Round, float::Special, ops::AssignRound,
-    ops::DivAssignRound, ops::PowAssignRound, Float,
+    float::Constant, float::OrdFloat, float::Round::{self, *}, float::Special, ops::AssignRound,
+    ops::{DivAssignRound, AddAssignRound, SubAssignRound, MulAssignRound}, ops::PowAssignRound, Float,
 };
 
 use rand::Rng;
@@ -194,13 +194,13 @@ pub(crate) fn bf(prec: u32, val: f64) -> Float {
 
 pub(crate) fn add_round(a: &Float, b: &Float, round: Round) -> Float {
     let mut tmp = a.clone();
-    tmp.mul_add_round(&bf(a.prec(), 1.0), b, round);
+    tmp.add_assign_round(b, round);
     tmp
 }
 
 pub(crate) fn sub_round(a: &Float, b: &Float, round: Round) -> Float {
-    let mut tmp = b.clone();
-    tmp.mul_add_round(&bf(a.prec(), -1.0), a, round);
+    let mut tmp = a.clone();
+    tmp.sub_assign_round(b, round);
     tmp
 }
 
@@ -212,7 +212,7 @@ pub(crate) fn div_round(a: &Float, b: &Float, round: Round) -> Float {
 
 pub(crate) fn mul_round(a: &Float, b: &Float, round: Round) -> Float {
     let mut tmp = a.clone();
-    tmp.mul_add_round(b, &bf(a.prec(), 0.0), round);
+    tmp.mul_assign_round(b, round);
     tmp
 }
 
@@ -321,17 +321,17 @@ impl Interval {
 
     pub fn pi(prec: u32) -> Interval {
         let mut lopi = Float::new(prec);
-        lopi.assign_round(Constant::Pi, Round::Down);
+        lopi.assign_round(Constant::Pi, Down);
         let mut hipi = Float::new(prec);
-        hipi.assign_round(Constant::Pi, Round::Up);
+        hipi.assign_round(Constant::Pi, Up);
         Interval::make(lopi, hipi, ErrorInterval::default())
     }
 
     pub fn e(prec: u32) -> Interval {
         let mut loe = Float::with_val(prec, 1.0);
-        loe.exp_round(Round::Down);
+        loe.exp_round(Down);
         let mut hie = Float::with_val(prec, 1.0);
-        hie.exp_round(Round::Up);
+        hie.exp_round(Up);
         Interval::make(loe, hie, ErrorInterval::default())
     }
 
@@ -345,24 +345,22 @@ impl Interval {
 
     pub fn add(&self, other: &Interval) -> Interval {
         let mut lo = self.lo();
-        lo.mul_add_round(&bf(other.lo().prec(), 1.0), &other.lo(), Round::Down);
+        lo.add_assign_round(other.lo(), Down);
         let mut hi = self.hi();
-        hi.mul_add_round(&bf(other.lo().prec(), 1.0), &other.hi(), Round::Up);
+        hi.add_assign_round(other.hi(), Up);
         Interval::make(lo, hi, self.err.union(&other.err))
     }
 
     pub fn sub(&self, other: &Interval) -> Interval {
-        let lo = sub_round(&self.lo(), &other.hi(), Round::Down);
-        let hi = sub_round(&self.hi(), &other.lo(), Round::Up);
+        let lo = sub_round(&self.lo(), &other.hi(), Down);
+        let hi = sub_round(&self.hi(), &other.lo(), Up);
         Interval::make(lo, hi, self.err.union(&other.err))
     }
 
     pub fn mul(&self, other: &Interval) -> Interval {
         let perform_mult = |lo1: &Float, lo2: &Float, hi1: &Float, hi2: &Float| {
-            let mut lo = lo1.clone();
-            lo.mul_add_round(lo2, &bf(lo1.prec(), 0.0), Round::Down);
-            let mut hi = hi1.clone();
-            hi.mul_add_round(hi2, &bf(hi1.prec(), 0.0), Round::Up);
+            let mut lo = mul_round(lo1, lo2, Down);
+            let mut hi = mul_round(hi2, hi1, Up);
             Interval::make(lo, hi, self.err.union(&other.err))
         };
 
@@ -415,9 +413,9 @@ impl Interval {
 
         let perform_div = |lo1: &Float, lo2: &Float, hi1: &Float, hi2: &Float| {
             let mut lo = lo1.clone();
-            lo.div_assign_round(lo2, Round::Down);
+            lo.div_assign_round(lo2, Down);
             let mut hi = hi1.clone();
-            hi.div_assign_round(hi2, Round::Up);
+            hi.div_assign_round(hi2, Up);
 
             Interval::make(lo, hi, error.clone())
         };
@@ -449,8 +447,8 @@ impl Interval {
     fn monotonic_mut(&self, fun: fn(&mut Float, Round) -> std::cmp::Ordering) -> Interval {
         let mut tmplo = self.lo();
         let mut tmphi = self.hi();
-        fun(&mut tmplo, Round::Down);
-        fun(&mut tmphi, Round::Up);
+        fun(&mut tmplo, Down);
+        fun(&mut tmphi, Up);
         if tmplo.is_nan() || tmphi.is_nan() {
             assert!(self.err.lo);
         }
@@ -460,8 +458,8 @@ impl Interval {
     fn comonotonic_mut(&self, fun: fn(&mut Float, Round) -> std::cmp::Ordering) -> Interval {
         let mut tmplo = self.hi();
         let mut tmphi = self.lo();
-        fun(&mut tmplo, Round::Down);
-        fun(&mut tmphi, Round::Up);
+        fun(&mut tmplo, Down);
+        fun(&mut tmphi, Up);
         if tmplo.is_nan() {
             panic!("comonotonic_mut: lo is NaN");
         }
@@ -509,8 +507,8 @@ impl Interval {
         let mut tmp = self.lo();
         let mut tmplo = self.lo();
         let mut tmphi = self.hi();
-        tmplo.trunc_fract_round(&mut tmp, Round::Down);
-        tmphi.trunc_fract_round(&mut tmp, Round::Up);
+        tmplo.trunc_fract_round(&mut tmp, Down);
+        tmphi.trunc_fract_round(&mut tmp, Up);
         Interval::make(tmplo, tmphi, self.err.clone())
     }
 
@@ -585,9 +583,9 @@ impl Interval {
         let self_pos = self.fabs();
         let other_pos = other.fabs();
         let mut tmp_lo = self_pos.lo();
-        tmp_lo.hypot_round(&other_pos.lo(), Round::Down);
+        tmp_lo.hypot_round(&other_pos.lo(), Down);
         let mut tmp_hi = self_pos.hi();
-        tmp_hi.hypot_round(&other_pos.hi(), Round::Up);
+        tmp_hi.hypot_round(&other_pos.hi(), Up);
         Interval::make(tmp_lo, tmp_hi, self.err.union(&other.err))
     }
 
@@ -603,9 +601,9 @@ impl Interval {
                     || (self.lo().is_zero() && other.lo() <= bf(other.hi().prec(), 0.0)),
             };
             let mut tmp_lo = lo1.clone();
-            tmp_lo.pow_assign_round(lo2, Round::Down);
+            tmp_lo.pow_assign_round(lo2, Down);
             let mut tmp_hi = hi1.clone();
-            tmp_hi.pow_assign_round(hi2, Round::Up);
+            tmp_hi.pow_assign_round(hi2, Up);
             Interval::make(tmp_lo, tmp_hi, err)
         };
 
@@ -721,18 +719,18 @@ impl Interval {
 
     fn period_lower(&self, is_even: bool) -> Float {
         let mut lopi = Float::new(self.lo().prec());
-        lopi.assign_round(Constant::Pi, Round::Down);
+        lopi.assign_round(Constant::Pi, Down);
         let mut hipi = Float::new(self.lo().prec());
-        hipi.assign_round(Constant::Pi, Round::Up);
+        hipi.assign_round(Constant::Pi, Up);
         let zero = bf(self.lo().prec(), 0.0);
 
         let mut afactor = self.lo();
-        afactor.div_assign_round(if self.lo() < zero { lopi } else { hipi }, Round::Down);
+        afactor.div_assign_round(if self.lo() < zero { lopi } else { hipi }, Down);
         if is_even {
             afactor.mul_sub_round(
                 &bf(self.lo().prec(), 1 as f64),
                 &bf(self.lo().prec(), 0.5 as f64),
-                Round::Down,
+                Down,
             );
         }
         afactor = afactor.floor();
@@ -742,18 +740,18 @@ impl Interval {
 
     fn period_higher(&self, is_even: bool) -> Float {
         let mut lopi = Float::new(self.lo().prec());
-        lopi.assign_round(Constant::Pi, Round::Down);
+        lopi.assign_round(Constant::Pi, Down);
         let mut hipi = Float::new(self.lo().prec());
-        hipi.assign_round(Constant::Pi, Round::Up);
+        hipi.assign_round(Constant::Pi, Up);
         let zero = bf(self.lo().prec(), 0.0);
 
         let mut bfactor = self.hi();
-        bfactor.div_assign_round(if self.hi() < zero { hipi } else { lopi }, Round::Up);
+        bfactor.div_assign_round(if self.hi() < zero { hipi } else { lopi }, Up);
         if is_even {
             bfactor.mul_sub_round(
                 &bf(self.hi().prec(), 1 as f64),
                 &bf(self.hi().prec(), 0.5 as f64),
-                Round::Up,
+                Up,
             );
         }
         bfactor = bfactor.ceil();
@@ -762,9 +760,9 @@ impl Interval {
 
     pub fn cos(&self) -> Interval {
         let mut lopi = Float::new(self.lo().prec());
-        lopi.assign_round(Constant::Pi, Round::Down);
+        lopi.assign_round(Constant::Pi, Down);
         let mut hipi = Float::new(self.lo().prec());
-        hipi.assign_round(Constant::Pi, Round::Up);
+        hipi.assign_round(Constant::Pi, Up);
 
         let afactor = self.period_lower(false);
         let bfactor = self.period_higher(false);
@@ -772,20 +770,20 @@ impl Interval {
         if afactor == bfactor && is_even(&afactor) {
             let mut hitmp = self.hi();
             let mut lotmp = self.lo();
-            hitmp.cos_round(Round::Down);
-            lotmp.cos_round(Round::Up);
+            hitmp.cos_round(Down);
+            lotmp.cos_round(Up);
             Interval::make(hitmp, lotmp, self.err.clone())
         } else if afactor == bfactor && is_odd(&afactor) {
             let mut hitmp = self.hi();
             let mut lotmp = self.lo();
-            hitmp.cos_round(Round::Up);
-            lotmp.cos_round(Round::Down);
+            hitmp.cos_round(Up);
+            lotmp.cos_round(Down);
             Interval::make(lotmp, hitmp, self.err.clone())
         } else if (bfactor.clone() - afactor.clone()) == (1.0) && is_even(&afactor) {
             let mut lotmp = self.lo();
-            lotmp.cos_round(Round::Up);
+            lotmp.cos_round(Up);
             let mut hitmp = self.hi();
-            hitmp.cos_round(Round::Up);
+            hitmp.cos_round(Up);
             Interval::make(
                 bf(self.lo().prec(), -1.0),
                 lotmp.max(&hitmp),
@@ -793,9 +791,9 @@ impl Interval {
             )
         } else if (bfactor.clone() - afactor.clone()) == (1.0) && is_odd(&afactor) {
             let mut lotmp = self.lo();
-            lotmp.cos_round(Round::Down);
+            lotmp.cos_round(Down);
             let mut hitmp = self.hi();
-            hitmp.cos_round(Round::Down);
+            hitmp.cos_round(Down);
             Interval::make(
                 lotmp.min(&hitmp),
                 bf(self.lo().prec(), 1.0),
@@ -812,9 +810,9 @@ impl Interval {
 
     pub fn sin(&self) -> Interval {
         let mut lopi = Float::new(self.lo().prec());
-        lopi.assign_round(Constant::Pi, Round::Down);
+        lopi.assign_round(Constant::Pi, Down);
         let mut hipi = Float::new(self.lo().prec());
-        hipi.assign_round(Constant::Pi, Round::Up);
+        hipi.assign_round(Constant::Pi, Up);
 
         let afactor = self.period_lower(true);
         let bfactor = self.period_higher(true);
@@ -822,20 +820,20 @@ impl Interval {
         if afactor == bfactor && is_even(&afactor) {
             let mut hitmp = self.hi();
             let mut lotmp = self.lo();
-            hitmp.sin_round(Round::Down);
-            lotmp.sin_round(Round::Up);
+            hitmp.sin_round(Down);
+            lotmp.sin_round(Up);
             Interval::make(hitmp, lotmp, self.err.clone())
         } else if afactor == bfactor && is_odd(&afactor) {
             let mut hitmp = self.hi();
             let mut lotmp = self.lo();
-            hitmp.sin_round(Round::Up);
-            lotmp.sin_round(Round::Down);
+            hitmp.sin_round(Up);
+            lotmp.sin_round(Down);
             Interval::make(lotmp, hitmp, self.err.clone())
         } else if (bfactor.clone() - afactor.clone()) == (1.0) && is_even(&afactor) {
             let mut lotmp = self.lo();
-            lotmp.sin_round(Round::Up);
+            lotmp.sin_round(Up);
             let mut hitmp = self.hi();
-            hitmp.sin_round(Round::Up);
+            hitmp.sin_round(Up);
             Interval::make(
                 bf(self.lo().prec(), -1.0),
                 lotmp.max(&hitmp),
@@ -843,9 +841,9 @@ impl Interval {
             )
         } else if (bfactor.clone() - afactor.clone()) == (1.0) && is_odd(&afactor) {
             let mut lotmp = self.lo();
-            lotmp.sin_round(Round::Down);
+            lotmp.sin_round(Down);
             let mut hitmp = self.hi();
-            hitmp.sin_round(Round::Down);
+            hitmp.sin_round(Down);
             Interval::make(
                 lotmp.min(&hitmp),
                 bf(self.lo().prec(), 1.0),
@@ -881,8 +879,8 @@ impl Interval {
         let mkatan = |lo1: &Float, lo2: &Float, hi1: &Float, hi2: &Float| {
             let mut lotmp = lo1.clone();
             let mut hitmp = hi1.clone();
-            lotmp.atan2_round(lo2, Round::Down);
-            hitmp.atan2_round(hi2, Round::Up);
+            lotmp.atan2_round(lo2, Down);
+            hitmp.atan2_round(hi2, Up);
             Interval::make(lotmp, hitmp, self.err.union(&other.err))
         };
 
@@ -897,7 +895,7 @@ impl Interval {
             (StrictlyNeg, StrictlyPos) => mkatan(&self.hi(), &other.hi(), &self.lo(), &other.lo()),
             (_, Mixed) => {
                 let mut hipi = Float::new(self.lo().prec());
-                hipi.assign_round(Constant::Pi, Round::Up);
+                hipi.assign_round(Constant::Pi, Up);
                 let zero = bf(self.lo().prec(), 0.0);
 
                 Interval::make(
@@ -963,35 +961,30 @@ impl Interval {
 
     // both self and other are positive
     pub fn fmod_pos(&self, other: &Interval) -> Interval {
-        let a = div_round(&self.lo(), &other.hi(), Round::Down).floor();
-        let b = div_round(&self.hi(), &other.hi(), Round::Up).ceil();
+        let a = div_round(&self.lo(), &other.hi(), Down).floor();
+        let b = div_round(&self.hi(), &other.hi(), Up).ceil();
 
         // no intersection along y.hi edge
         if a == b {
             let mut c = self.hi();
-            c.div_assign_round(other.hi(), Round::Down);
+            c.div_assign_round(other.hi(), Down);
             let mut d = self.hi();
-            d.div_assign_round(other.lo(), Round::Up);
+            d.div_assign_round(other.lo(), Up);
 
             // no intersection along x.hi either; use top-left/bottom-right point
             if c == d {
                 let mut tmplo = c.clone();
-                tmplo.mul_sub_round(&other.hi(), &self.lo(), Round::Up);
+                tmplo.mul_sub_round(&other.hi(), &self.lo(), Up);
                 tmplo = -tmplo;
                 let mut tmphi = c;
-                tmphi.mul_sub_round(&other.lo(), &self.hi(), Round::Down);
+                tmphi.mul_sub_round(&other.lo(), &self.hi(), Down);
                 tmphi = -tmphi;
 
                 Interval::make(tmplo, tmphi, self.err.clone())
             } else {
-                let mut cplusone = c.clone();
-                cplusone.mul_add_round(
-                    &bf(self.lo().prec(), 1.0),
-                    &bf(self.lo().prec(), 1.0),
-                    Round::Down,
-                );
+                let mut cplusone = add_round(&c, &bf(self.lo().prec(), 1.0), Down);
                 let mut tmphi = self.hi();
-                tmphi.div_assign_round(cplusone, Round::Up);
+                tmphi.div_assign_round(cplusone, Up);
                 Interval::make(bf(self.lo().prec(), 0.0), tmphi, self.err.clone())
             }
         } else {
@@ -1026,28 +1019,28 @@ impl Interval {
 
     // mostly copied from fmod_pos
     pub fn remainder_pos(&self, other: &Interval) -> Interval {
-        let a = div_round(&self.lo(), &other.hi(), Round::Down).floor();
-        let b = div_round(&self.hi(), &other.hi(), Round::Up).ceil();
+        let a = div_round(&self.lo(), &other.hi(), Down).floor();
+        let b = div_round(&self.hi(), &other.hi(), Up).ceil();
 
         // no intersection along y.hi edge
         if a == b {
             let mut c = self.hi();
-            c.div_assign_round(other.hi(), Round::Down);
+            c.div_assign_round(other.hi(), Down);
             let mut d = self.hi();
-            d.div_assign_round(other.lo(), Round::Up);
+            d.div_assign_round(other.lo(), Up);
 
             // no intersection along x.hi either; use top-left/bottom-right point
             if c == d {
-                let halfway = div_round(&other.hi(), &bf(self.lo().prec(), 2.0), Round::Down);
+                let halfway = div_round(&other.hi(), &bf(self.lo().prec(), 2.0), Down);
 
                 let mut tmplo = c.clone();
-                tmplo.mul_sub_round(&other.hi(), &self.lo(), Round::Up);
+                tmplo.mul_sub_round(&other.hi(), &self.lo(), Up);
                 tmplo = -tmplo;
                 // DIFFERENCE FROM fmod_pos
                 tmplo = tmplo.max(&-halfway.clone());
 
                 let mut tmphi = c;
-                tmphi.mul_sub_round(&other.lo(), &self.hi(), Round::Down);
+                tmphi.mul_sub_round(&other.lo(), &self.hi(), Down);
                 tmphi = -tmphi;
                 // DIFFERENCE FROM fmod_pos
                 tmphi = tmphi.min(&halfway);
@@ -1059,27 +1052,27 @@ impl Interval {
                 let y_hi = div_round(
                     &div_round(
                         &self.hi(),
-                        &add_round(&c, &bf(self.lo().prec(), 0.5), Round::Down),
-                        Round::Down,
+                        &add_round(&c, &bf(self.lo().prec(), 0.5), Down),
+                        Down,
                     ),
                     &bf(self.lo().prec(), 2.0),
-                    Round::Down,
+                    Down,
                 );
                 let y_lo = sub_round(
                     &self.lo(),
-                    &mul_round(&c, &other.hi(), Round::Down),
-                    Round::Down,
+                    &mul_round(&c, &other.hi(), Down),
+                    Down,
                 )
                 .max(&-div_round(
                     &other.hi(),
                     &bf(self.lo().prec(), 2.0),
-                    Round::Down,
+                    Down,
                 ));
 
                 Interval::make(y_lo.min(&-y_hi.clone()), y_hi, self.err.clone())
             }
         } else {
-            let y = div_round(&other.hi(), &bf(self.lo().prec(), 2.0), Round::Up);
+            let y = div_round(&other.hi(), &bf(self.lo().prec(), 2.0), Up);
             Interval::make(
                 // DIFFERENCE FROM fmod_pos
                 -y.clone(),
@@ -1242,6 +1235,7 @@ mod tests {
     use std::f64::{NAN, INFINITY};
 
     use super::*;
+    use float_next_after::NextAfter;
     use symbol_table::GlobalSymbol as Symbol;
     use rand::Rng;
     use rug::ops::Pow;
@@ -1252,8 +1246,8 @@ mod tests {
     fn rat_to_interval(rat: &Rational, prec: u32) -> Interval {
         let mut lo = Float::with_val(prec, 0.0);
         let mut hi = Float::with_val(prec, 0.0);
-        lo.add_from_round(rat, Round::Down);
-        hi.add_from_round(rat, Round::Up);
+        lo.add_from_round(rat, Down);
+        hi.add_from_round(rat, Up);
         Interval::make(lo, hi, ErrorInterval {
             lo: false,
             hi: false,
