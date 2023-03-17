@@ -335,6 +335,17 @@ impl Interval {
         Interval::make(loe, hie, ErrorInterval::default())
     }
 
+    pub fn nan(prec: u32) -> Interval {
+        Interval::make(
+            Float::with_val(prec, Special::Nan),
+            Float::with_val(prec, Special::Nan),
+            ErrorInterval {
+                lo: true,
+                hi: true,
+            },
+        )
+    }
+
     pub fn inf(prec: u32) -> Interval {
         Interval::make(
             Float::with_val(prec, Special::Infinity),
@@ -359,8 +370,8 @@ impl Interval {
 
     pub fn mul(&self, other: &Interval) -> Interval {
         let perform_mult = |lo1: &Float, lo2: &Float, hi1: &Float, hi2: &Float| {
-            let mut lo = mul_round(lo1, lo2, Down);
-            let mut hi = mul_round(hi2, hi1, Up);
+            let lo = mul_round(lo1, lo2, Down);
+            let hi = mul_round(hi2, hi1, Up);
             Interval::make(lo, hi, self.err.union(&other.err))
         };
 
@@ -449,9 +460,6 @@ impl Interval {
         let mut tmphi = self.hi();
         fun(&mut tmplo, Down);
         fun(&mut tmphi, Up);
-        if tmplo.is_nan() || tmphi.is_nan() {
-            assert!(self.err.lo);
-        }
         Interval::make(tmplo, tmphi, self.err.clone())
     }
 
@@ -480,6 +488,7 @@ impl Interval {
         )
     }
 
+    // TODO does this need to go to the next value after lo?
     fn clamp_strict(&self, lo: &Float, hi: &Float) -> Interval {
         Interval::make(
             self.lo().max(lo).min(hi),
@@ -697,7 +706,7 @@ impl Interval {
     }
 
     pub fn pow(&self, other: &Interval) -> Interval {
-        if self.hi() < bf(self.lo().prec(), 0.0) {
+        let res = if self.hi() < bf(self.lo().prec(), 0.0) {
             self.pow_neg(other)
         } else if self.lo() >= bf(self.lo().prec(), 0.0) {
             self.pow_pos(other)
@@ -710,7 +719,8 @@ impl Interval {
                 bf(self.lo().prec(), f64::NAN),
                 ErrorInterval { lo: true, hi: true },
             )
-        }
+        };
+        res
     }
 
     pub fn fma(&self, other: &Interval, third: &Interval) -> Interval {
