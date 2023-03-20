@@ -211,9 +211,16 @@ pub(crate) fn div_round(a: &Float, b: &Float, round: Round) -> Float {
 }
 
 pub(crate) fn mul_round(a: &Float, b: &Float, round: Round) -> Float {
-    let mut tmp = a.clone();
-    tmp.mul_assign_round(b, round);
-    tmp
+    // handle infinities multiplying zeros
+    if a.is_zero() {
+        a.clone()
+    } else if b.is_zero() {
+        b.clone()
+    } else {
+        let mut tmp = a.clone();
+        tmp.mul_assign_round(b, round);
+        tmp
+    }
 }
 
 impl Interval {
@@ -278,6 +285,9 @@ impl Interval {
     }
 
     pub fn make(lo: Float, hi: Float, err: ErrorInterval) -> Interval {
+        if lo.is_nan() || hi.is_nan() {
+            assert!(err.is_guaranteed());
+        }
         Interval {
             lo: Interval::to_ord(lo),
             hi: Interval::to_ord(hi),
@@ -427,17 +437,20 @@ impl Interval {
             lo.div_assign_round(lo2, Down);
             let mut hi = hi1.clone();
             hi.div_assign_round(hi2, Up);
-
-            Interval::make(lo, hi, error.clone())
+            
+            let res = Interval::make(lo, hi, error.clone());
+            res
         };
 
         use IntervalClassification::*;
         match (self.classify(), other.classify()) {
-            (_any, Mixed) => Interval::make(
+            (_any, Mixed) => {
+                Interval::make(
                 bf(self.lo().prec(), std::f64::NEG_INFINITY),
                 bf(self.lo().prec(), std::f64::INFINITY),
                 error,
-            ),
+            )
+        },
             (StrictlyPos, StrictlyPos) => {
                 perform_div(&self.lo(), &other.hi(), &self.hi(), &other.lo())
             }
